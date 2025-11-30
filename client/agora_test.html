@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Agora Audio Test</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    #log {
+      margin-top: 20px;
+      padding: 10px;
+      border: 1px solid #ccc;
+      height: 300px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    button { padding: 8px 16px; }
+  </style>
+</head>
+<body>
+<h1>Agora Audio Test (EC2)</h1>
+
+<button id="joinBtn">Join & Publish Mic</button>
+<div id="log"></div>
+
+<script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.20.0.js"></script>
+<script>
+
+  // EC2 public IP + backend port
+  const EC2_HOST = "18.153.73.55:8000";
+
+  const logDiv = document.getElementById("log");
+  const joinBtn = document.getElementById("joinBtn");
+
+  function log(msg) {
+    console.log(msg);
+    logDiv.textContent += msg + "\n";
+    logDiv.scrollTop = logDiv.scrollHeight;
+  }
+
+  // WebSocket connection to FastAPI backend
+  const audioWs = new WebSocket(`ws://${EC2_HOST}/audio-stream`);
+
+  audioWs.onopen = () => log("Audio WebSocket connected");
+  audioWs.onerror = () => log("WebSocket error");
+  audioWs.onclose = () => log("Audio WebSocket closed");
+
+  async function main() {
+    try {
+      // Fetch Agora config from backend
+      const res = await fetch(`http://${EC2_HOST}/agora-config`);
+      const cfg = await res.json();
+
+      log("Loaded config:");
+      log(JSON.stringify(cfg));
+
+      // Create Agora RTC client
+      const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+
+      // Join Agora channel
+      const realUid = await client.join(cfg.app_id, cfg.channel, cfg.token, null);
+      log("Joined channel as UID " + realUid);
+
+      // Create microphone audio track
+      const micTrack = await AgoraRTC.createMicrophoneAudioTrack();
+      log("Microphone track created");
+
+      // Send PCM audio frames to backend via WebSocket
+      micTrack.setAudioFrameCallback((audioBuffer) => {
+        const channelData = audioBuffer.getChannelData(0);
+        if (audioWs.readyState === WebSocket.OPEN) {
+          audioWs.send(channelData.buffer);
+        }
+      }, 2048);
+
+      // Publish microphone audio to Agora
+      await client.publish(micTrack);
+      log("Microphone published!");
+
+    } catch (err) {
+      console.error(err);
+      log("Error: " + err);
+    }
+  }
+
+  joinBtn.onclick = main;
+</script>
+</body>
+</html>
