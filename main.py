@@ -87,6 +87,11 @@ async def audio_stream(websocket: WebSocket):
     await websocket.accept()
     print("✅ Audio WebSocket connected")
     try:
+        # First message from client is a small JSON meta with the UID
+        meta = await websocket.receive_text()
+        print(f"ℹ️ Got meta from client: {meta}")
+
+        # Next messages are raw audio bytes
         while True:
             data = await websocket.receive_bytes()
             print(f"🎧 Received audio chunk of {len(data)} bytes")

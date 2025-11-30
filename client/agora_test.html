@@ -12,22 +12,19 @@
       height: 300px;
       overflow-y: auto;
       white-space: pre-wrap;
+      font-size: 14px;
     }
-    button { padding: 8px 16px; }
+    button { padding: 8px 16px; cursor: pointer; }
   </style>
 </head>
 <body>
-<h1>Agora Audio Test (EC2)</h1>
+<h1>Agora Audio Test</h1>
 
 <button id="joinBtn">Join & Publish Mic</button>
 <div id="log"></div>
 
 <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.20.0.js"></script>
 <script>
-
-  // EC2 public IP + backend port
-  const EC2_HOST = "18.153.73.55:8000";
-
   const logDiv = document.getElementById("log");
   const joinBtn = document.getElementById("joinBtn");
 
@@ -37,44 +34,71 @@
     logDiv.scrollTop = logDiv.scrollHeight;
   }
 
-  // WebSocket connection to FastAPI backend
-  const audioWs = new WebSocket(`ws://${EC2_HOST}/audio-stream`);
+  // EC2 backend routes
+  const API_BASE = "http://ec2-18-153-73-55.eu-central-1.compute.amazonaws.com:8000";
+  const WS_URL = "ws://ec2-18-153-73-55.eu-central-1.compute.amazonaws.com:8000/audio-stream";
+
+  // Main WebSocket for audio streaming
+  const audioWs = new WebSocket(WS_URL);
 
   audioWs.onopen = () => log("Audio WebSocket connected");
-  audioWs.onerror = () => log("WebSocket error");
   audioWs.onclose = () => log("Audio WebSocket closed");
+  audioWs.onerror = (e) => {
+    console.error("Audio WebSocket error", e);
+    log("Audio WebSocket error");
+  };
 
   async function main() {
     try {
-      // Fetch Agora config from backend
-      const res = await fetch(`http://${EC2_HOST}/agora-config`);
+      // 1) Load Agora config
+      const res = await fetch(`${API_BASE}/agora-config`);
       const cfg = await res.json();
 
-      log("Loaded config:");
-      log(JSON.stringify(cfg));
+      const appId = cfg.app_id;
+      const channel = cfg.channel;
+      const token = cfg.token || null;
+      const uid = null;
 
-      // Create Agora RTC client
+      log("Loaded config:");
+      log(JSON.stringify(cfg, null, 2));
+
+      // 2) Create Agora client
       const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
-      // Join Agora channel
-      const realUid = await client.join(cfg.app_id, cfg.channel, cfg.token, null);
-      log("Joined channel as UID " + realUid);
+      // 3) Join Agora channel
+      const realUid = await client.join(appId, channel, token, uid);
+      log("Joined channel as UID: " + realUid);
 
-      // Create microphone audio track
+      // 4) Create microphone track
       const micTrack = await AgoraRTC.createMicrophoneAudioTrack();
       log("Microphone track created");
 
-      // Send PCM audio frames to backend via WebSocket
+      // 5) Send UID metadata to backend BEFORE streaming audio
+      function sendUidMeta() {
+        audioWs.send(JSON.stringify({
+          type: "meta",
+          uid: realUid
+        }));
+        log("Sent UID meta to backend: " + realUid);
+      }
+
+      if (audioWs.readyState === WebSocket.OPEN) {
+        sendUidMeta();
+      } else {
+        audioWs.addEventListener("open", sendUidMeta);
+      }
+
+      // 6) Stream raw PCM audio frames to backend
       micTrack.setAudioFrameCallback((audioBuffer) => {
-        const channelData = audioBuffer.getChannelData(0);
+        const channelData = audioBuffer.getChannelData(0); // Float32Array
         if (audioWs.readyState === WebSocket.OPEN) {
           audioWs.send(channelData.buffer);
         }
       }, 2048);
 
-      // Publish microphone audio to Agora
+      // 7) Publish microphone audio to Agora
       await client.publish(micTrack);
-      log("Microphone published!");
+      log("Microphone published to Agora!");
 
     } catch (err) {
       console.error(err);
