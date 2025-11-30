@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Agora Audio Test</title>
+  <title>Agora Audio Test – Multi Participant</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; }
     #log {
@@ -14,19 +14,25 @@
       white-space: pre-wrap;
       font-size: 14px;
     }
-    button { padding: 8px 16px; cursor: pointer; }
+    button {
+      padding: 8px 16px;
+      cursor: pointer;
+      margin-right: 8px;
+    }
   </style>
 </head>
 <body>
-<h1>Agora Audio Test</h1>
+<h1>Agora Audio Test – Multi Participant Demo</h1>
 
 <button id="joinBtn">Join & Publish Mic</button>
+<button id="muteBtn" disabled>Mute</button>
 <div id="log"></div>
 
 <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.20.0.js"></script>
 <script>
   const logDiv = document.getElementById("log");
   const joinBtn = document.getElementById("joinBtn");
+  const muteBtn = document.getElementById("muteBtn");
 
   function log(msg) {
     console.log(msg);
@@ -34,30 +40,26 @@
     logDiv.scrollTop = logDiv.scrollHeight;
   }
 
-  // EC2 backend routes
+  // EC2 backend URLs
   const API_BASE = "http://ec2-18-153-73-55.eu-central-1.compute.amazonaws.com:8000";
-  const WS_URL = "ws://ec2-18-153-73-55.eu-central-1.compute.amazonaws.com:8000/audio-stream";
+  const WS_URL   = "ws://ec2-18-153-73-55.eu-central-1.compute.amazonaws.com:8000/audio-stream";
 
-  // Main WebSocket for audio streaming
-  const audioWs = new WebSocket(WS_URL);
-
-  audioWs.onopen = () => log("Audio WebSocket connected");
-  audioWs.onclose = () => log("Audio WebSocket closed");
-  audioWs.onerror = (e) => {
-    console.error("Audio WebSocket error", e);
-    log("Audio WebSocket error");
-  };
+  let audioWs = null;
+  let globalMicTrack = null;
+  let isMuted = false;
 
   async function main() {
     try {
-      // 1) Load Agora config
+      joinBtn.disabled = true;
+
+      // 1) Load Agora config from FastAPI (EC2)
       const res = await fetch(`${API_BASE}/agora-config`);
       const cfg = await res.json();
 
-      const appId = cfg.app_id;
+      const appId  = cfg.app_id;
       const channel = cfg.channel;
-      const token = cfg.token || null;
-      const uid = null;
+      const token   = cfg.token || null;
+      const uid     = null; // Let Agora assign UID
 
       log("Loaded config:");
       log(JSON.stringify(cfg, null, 2));
@@ -65,48 +67,78 @@
       // 2) Create Agora client
       const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
-      // 3) Join Agora channel
+      // 3) Join channel
       const realUid = await client.join(appId, channel, token, uid);
       log("Joined channel as UID: " + realUid);
 
-      // 4) Create microphone track
-      const micTrack = await AgoraRTC.createMicrophoneAudioTrack();
-      log("Microphone track created");
+      // 4) Open WebSocket to backend (for this tab)
+      audioWs = new WebSocket(WS_URL);
 
-      // 5) Send UID metadata to backend BEFORE streaming audio
-      function sendUidMeta() {
-        audioWs.send(JSON.stringify({
+      audioWs.onopen = () => {
+        log("Audio WebSocket connected");
+
+        const meta = {
           type: "meta",
           uid: realUid
-        }));
+        };
+        audioWs.send(JSON.stringify(meta));
         log("Sent UID meta to backend: " + realUid);
-      }
+      };
 
-      if (audioWs.readyState === WebSocket.OPEN) {
-        sendUidMeta();
-      } else {
-        audioWs.addEventListener("open", sendUidMeta);
-      }
+      audioWs.onclose = () => {
+        log("Audio WebSocket closed");
+      };
 
-      // 6) Stream raw PCM audio frames to backend
+      audioWs.onerror = (e) => {
+        console.error("Audio WebSocket error", e);
+        log("Audio WebSocket error");
+      };
+
+      // 5) Create microphone track
+      const micTrack = await AgoraRTC.createMicrophoneAudioTrack();
+      globalMicTrack = micTrack;
+      muteBtn.disabled = false;
+      log("Microphone track created");
+
+      // 6) Send PCM frames to backend via WebSocket
       micTrack.setAudioFrameCallback((audioBuffer) => {
         const channelData = audioBuffer.getChannelData(0); // Float32Array
-        if (audioWs.readyState === WebSocket.OPEN) {
+
+        if (audioWs && audioWs.readyState === WebSocket.OPEN && !isMuted) {
           audioWs.send(channelData.buffer);
         }
       }, 2048);
 
-      // 7) Publish microphone audio to Agora
+      // 7) Publish microphone to Agora
       await client.publish(micTrack);
       log("Microphone published to Agora!");
 
     } catch (err) {
       console.error(err);
       log("Error: " + err);
+      joinBtn.disabled = false;
     }
   }
 
+  // Join button
   joinBtn.onclick = main;
+
+  // Mute/Unmute button
+  muteBtn.onclick = () => {
+    if (!globalMicTrack) return;
+
+    isMuted = !isMuted;
+
+    if (isMuted) {
+      globalMicTrack.setEnabled(false);
+      log("🔇 Muted microphone");
+      muteBtn.innerText = "Unmute";
+    } else {
+      globalMicTrack.setEnabled(true);
+      log("🎤 Unmuted microphone");
+      muteBtn.innerText = "Mute";
+    }
+  };
 </script>
 </body>
 </html>
