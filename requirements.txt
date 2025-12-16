@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+agora_python_server_sdk>=2.0.0
+numpy
+soniox

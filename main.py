@@ -1,108 +1,85 @@
-import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic_settings import BaseSettings
-from dotenv import load_dotenv
-from typing import Dict
+# main.py
+import logging
+import os
+import traceback
 
-load_dotenv()
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
-# Global mapping from Agora UID to see better  speaker label
-uid_to_speaker: Dict[int, str] = {}
-next_speaker_index: int = 1
+from agora_service import AgoraManager
 
-def get_or_assign_speaker(uid: int) -> str:
-    """
-    Map each new UID to a label like 'speaker1', 'speaker2', etc.
-    """
-    global next_speaker_index
-
-    if uid not in uid_to_speaker:
-        uid_to_speaker[uid] = f"speaker{next_speaker_index}"
-        next_speaker_index += 1
-
-    return uid_to_speaker[uid]
-
-
-class Settings(BaseSettings):
-    AGORA_APP_ID: str
-    AGORA_APP_CERTIFICATE: str
-    AGORA_CHANNEL_NAME: str
-    AGORA_TOKEN: str
-    AGORA_RECORDER_UID: str
-
-    class Config:
-        env_file = ".env"
-
-
-settings = Settings()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+class ConnectionRequest(BaseModel):
+    channel_name: str
+    uid: str
+    token: str
 
 
-@app.get("/agora-config")
-def get_agora_config():
-    return {
-        "app_id": settings.AGORA_APP_ID,
-        "channel": settings.AGORA_CHANNEL_NAME,
-        "recorder_uid": settings.AGORA_RECORDER_UID,
-        "token": settings.AGORA_TOKEN,
-    }
+# Load Agora App ID from environment (with fallback for local testing)
+APP_ID = os.getenv("AGORA_APP_ID")
+if not APP_ID:
+    APP_ID = "5deec9e3974849299a1e0a770fcca06d"
+    logger.warning(
+        "AGORA_APP_ID environment variable not found, using hardcoded APP_ID. "
+        "Do NOT use this in production."
+    )
+
+# Create and initialize Agora service once on process startup
+agora_manager = AgoraManager()
+agora_manager.initialize(APP_ID)
 
 
-@app.websocket("/audio-stream")
-async def audio_stream(websocket: WebSocket):
-    await websocket.accept()
-    print("✅ Audio WebSocket connected")
-
-    client_uid = None
-    client_speaker_label = None
-
+@app.post("/start")
+def start_bot(request: ConnectionRequest):
+    """
+    Start an RTC connection to a specific Agora channel.
+    """
     try:
-        while True:
-            message = await websocket.receive()
+        success = agora_manager.start_connection(
+            channel_name=request.channel_name,
+            uid=request.uid,
+            token=request.token,
+        )
 
-            msg_type = message.get("type")
+        if not success:
+            # start_connection returned False – log and return 500
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to connect to Agora (check logs)",
+            )
 
-            # Handle client disconnect cleanly
-            if msg_type == "websocket.disconnect":
-                print(f"❌ WebSocket disconnect received (UID={client_uid}, speaker={client_speaker_label})")
-                break
+        return {
+            "status": "connected",
+            "channel": request.channel_name,
+            "uid": request.uid,
+        }
 
-            # Text messages: meta info (like Agora UID)
-            if "text" in message and message["text"] is not None:
-                try:
-                    meta = json.loads(message["text"])
-                    if meta.get("type") == "meta":
-                        client_uid = meta.get("uid")
-                        client_speaker_label = get_or_assign_speaker(client_uid)
-                        print(f"ℹ️ Got meta from client: UID={client_uid}, label={client_speaker_label}")
-                except json.JSONDecodeError:
-                    print("⚠️ Received non-JSON text message")
+    except HTTPException:
+        # Re-raise HTTPException as-is so FastAPI handles it correctly
+        raise
+    except Exception as e:
+        # Any unexpected error – include traceback for debugging
+        stack = traceback.format_exc()
+        logger.error("CRITICAL ERROR in /start:\n%s", stack)
 
-            # Binary messages: raw audio bytes
-            if "bytes" in message and message["bytes"] is not None:
-                audio_bytes = message["bytes"]
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": str(e),
+                "trace": stack,
+            },
+        )
 
-                if client_uid is not None:
-                    speaker_label = client_speaker_label or uid_to_speaker.get(client_uid, "unknown")
-                    print(
-                        f"🎧 {speaker_label} | UID={client_uid} | Received audio chunk of {len(audio_bytes)} bytes"
-                    )
-                else:
-                    print(f"🎧 UID=(unknown) | Received audio chunk of {len(audio_bytes)} bytes")
 
-    except RuntimeError as e:
-        print(f"⚠️ RuntimeError on receive (UID={client_uid}, speaker={client_speaker_label}): {e}")
-    except WebSocketDisconnect:
-        print(f"❌ Audio WebSocket disconnected (UID={client_uid}, speaker={client_speaker_label})")
-    finally:
-        print(f"🔚 WebSocket handler finished for UID={client_uid}, speaker={client_speaker_label}")
+@app.post("/stop")
+def stop_bot():
+    """
+    Stop the current RTC connection and release resources.
+    """
+    agora_manager.stop_connection()
+    return {"status": "disconnected"}

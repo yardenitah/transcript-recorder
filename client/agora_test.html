@@ -2,143 +2,165 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Agora Audio Test – Multi Participant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agora Client - Lightweight</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    #log {
-      margin-top: 20px;
-      padding: 10px;
-      border: 1px solid #ccc;
-      height: 300px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      font-size: 14px;
-    }
-    button {
-      padding: 8px 16px;
-      cursor: pointer;
-      margin-right: 8px;
-    }
+    /* Basic styling for a clean UI */
+    body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; background: #f0f2f5; display: flex; flex-direction: column; align-items: center; }
+    .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100%; max-width: 500px; text-align: center; }
+    h1 { color: #333; margin-bottom: 20px; }
+    #status { margin: 20px 0; padding: 10px; background: #e8f0fe; border-radius: 6px; color: #1a73e8; font-weight: 500; }
+    .controls { display: flex; gap: 10px; justify-content: center; }
+    button { padding: 12px 24px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; transition: all 0.2s; }
+
+    #joinBtn { background: #007bff; color: white; }
+    #joinBtn:hover { background: #0056b3; }
+    #joinBtn:disabled { background: #ccc; cursor: not-allowed; }
+
+    #leaveBtn { background: #dc3545; color: white; }
+    #leaveBtn:hover { background: #a71d2a; }
+    #leaveBtn:disabled { background: #ccc; cursor: not-allowed; }
+
+    #muteBtn { background: #6c757d; color: white; }
+    #muteBtn:hover { background: #5a6268; }
+    #muteBtn:disabled { background: #ccc; cursor: not-allowed; }
+    /* Style for when muted */
+    #muteBtn.muted { background: #ffc107; color: #333; }
   </style>
 </head>
 <body>
-<h1>Agora Audio Test – Multi Participant Demo</h1>
 
-<button id="joinBtn">Join & Publish Mic</button>
-<button id="muteBtn" disabled>Mute</button>
-<div id="log"></div>
+<div class="container">
+  <h1>🎙️ Guest Client</h1>
+  <p>Connects to Agora only. Audio is routed to the server via the Bot.</p>
+
+  <div id="status">Ready to join...</div>
+
+  <div class="controls">
+    <button id="joinBtn">Join Channel</button>
+    <button id="muteBtn" disabled>Mute</button>
+    <button id="leaveBtn" disabled>Leave</button>
+  </div>
+</div>
 
 <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.20.0.js"></script>
 <script>
-  const logDiv = document.getElementById("log");
-  const joinBtn = document.getElementById("joinBtn");
-  const muteBtn = document.getElementById("muteBtn");
-
-  function log(msg) {
-    console.log(msg);
-    logDiv.textContent += msg + "\n";
-    logDiv.scrollTop = logDiv.scrollHeight;
-  }
-
-  // EC2 backend URLs
+  // --- CONFIG ---
+  // Connects to your Python backend (EC2) to fetch credentials securely.
+  // The client NEVER talks directly to Soniox or the Transcript service.
   const API_BASE = "http://ec2-18-153-73-55.eu-central-1.compute.amazonaws.com:8000";
-  const WS_URL   = "ws://ec2-18-153-73-55.eu-central-1.compute.amazonaws.com:8000/audio-stream";
 
-  let audioWs = null;
-  let globalMicTrack = null;
+
+  let client = null;
+  let localAudioTrack = null;
   let isMuted = false;
 
-  async function main() {
+  const statusDiv = document.getElementById("status");
+  const joinBtn = document.getElementById("joinBtn");
+  const leaveBtn = document.getElementById("leaveBtn");
+  const muteBtn = document.getElementById("muteBtn");
+
+  function updateStatus(msg) { statusDiv.textContent = msg; }
+
+  /**
+   * Main function to join the Agora Channel.
+   * Flow: Fetch Config -> Init SDK -> Join -> Publish Mic
+   */
+  async function join() {
     try {
       joinBtn.disabled = true;
+      updateStatus("Fetching config...");
 
-      // 1) Load Agora config from FastAPI (EC2)
+      // 1. Fetch Config from Backend
+      // We retrieve AppID, Channel Name, and Token securely.
       const res = await fetch(`${API_BASE}/agora-config`);
       const cfg = await res.json();
 
-      const appId  = cfg.app_id;
-      const channel = cfg.channel;
-      const token   = cfg.token || null;
-      const uid     = null; // Let Agora assign UID
+      // 2. Init Agora Client
+      // Create the local client object for handling the call.
+      client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
-      log("Loaded config:");
-      log(JSON.stringify(cfg, null, 2));
+      // 3. Join the Channel
+      updateStatus("Joining channel...");
+      const uid = await client.join(cfg.app_id, cfg.channel, cfg.token || null, null);
 
-      // 2) Create Agora client
-      const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+      // 4. Create & Publish Microphone Track (CRITICAL STEP)
+      // This captures user audio and sends it to Agora Cloud.
+      // The Electron Bot (running on the server) listens to this stream.
+      localAudioTrack = await AgoraRTC.createMicrophoneAudioTrack();
+      await client.publish([localAudioTrack]);
 
-      // 3) Join channel
-      const realUid = await client.join(appId, channel, token, uid);
-      log("Joined channel as UID: " + realUid);
+      updateStatus(`Connected as UID: ${uid}`);
 
-      // 4) Open WebSocket to backend (for this tab)
-      audioWs = new WebSocket(WS_URL);
-
-      audioWs.onopen = () => {
-        log("Audio WebSocket connected");
-
-        const meta = {
-          type: "meta",
-          uid: realUid
-        };
-        audioWs.send(JSON.stringify(meta));
-        log("Sent UID meta to backend: " + realUid);
-      };
-
-      audioWs.onclose = () => {
-        log("Audio WebSocket closed");
-      };
-
-      audioWs.onerror = (e) => {
-        console.error("Audio WebSocket error", e);
-        log("Audio WebSocket error");
-      };
-
-      // 5) Create microphone track
-      const micTrack = await AgoraRTC.createMicrophoneAudioTrack();
-      globalMicTrack = micTrack;
+      // Enable UI controls
+      leaveBtn.disabled = false;
       muteBtn.disabled = false;
-      log("Microphone track created");
 
-      // 6) Send PCM frames to backend via WebSocket
-      micTrack.setAudioFrameCallback((audioBuffer) => {
-        const channelData = audioBuffer.getChannelData(0); // Float32Array
+      // Reset mute state
+      isMuted = false;
+      muteBtn.innerText = "Mute";
+      muteBtn.classList.remove("muted");
 
-        if (audioWs && audioWs.readyState === WebSocket.OPEN && !isMuted) {
-          audioWs.send(channelData.buffer);
-        }
-      }, 2048);
-
-      // 7) Publish microphone to Agora
-      await client.publish(micTrack);
-      log("Microphone published to Agora!");
-
-    } catch (err) {
-      console.error(err);
-      log("Error: " + err);
+    } catch (e) {
+      console.error(e);
+      updateStatus("Error: " + e.message);
       joinBtn.disabled = false;
     }
   }
 
-  // Join button
-  joinBtn.onclick = main;
+  /**
+   * Leave the channel and clean up resources.
+   */
+  async function leave() {
+    // 1. Stop Microphone access (hardware)
+    if (localAudioTrack) {
+      localAudioTrack.close();
+      localAudioTrack = null;
+    }
+    // 2. Disconnect from Agora Cloud
+    if (client) {
+      await client.leave();
+      client = null;
+    }
+    updateStatus("Disconnected");
 
-  // Mute/Unmute button
-  muteBtn.onclick = () => {
-    if (!globalMicTrack) return;
+    // Reset buttons and UI
+    joinBtn.disabled = false;
+    leaveBtn.disabled = true;
+    muteBtn.disabled = true;
+    muteBtn.innerText = "Mute";
+    muteBtn.classList.remove("muted");
+    isMuted = false;
+  }
+
+  /**
+   * Toggle Microphone Mute state.
+   * Note: This stops sending audio frames.
+   * The backend server will detect silence and send keep-alive packets to Soniox.
+   */
+  async function toggleMute() {
+    if (!localAudioTrack) return;
 
     isMuted = !isMuted;
 
+    // Enable/Disable the track transmission
+    await localAudioTrack.setEnabled(!isMuted);
+
     if (isMuted) {
-      globalMicTrack.setEnabled(false);
-      log("🔇 Muted microphone");
-      muteBtn.innerText = "Unmute";
+        muteBtn.innerText = "Unmute";
+        muteBtn.classList.add("muted");
+        updateStatus("Microphone Muted 🔇");
     } else {
-      globalMicTrack.setEnabled(true);
-      log("🎤 Unmuted microphone");
-      muteBtn.innerText = "Mute";
+        muteBtn.innerText = "Mute";
+        muteBtn.classList.remove("muted");
+        updateStatus("Microphone Active 🎤");
     }
-  };
+  }
+
+  // Bind buttons to functions
+  joinBtn.onclick = join;
+  leaveBtn.onclick = leave;
+  muteBtn.onclick = toggleMute;
 </script>
 </body>
 </html>
