@@ -93,8 +93,7 @@ class PcmAudioObserver(IAudioFrameObserver):
 
                 result_iter = transcribe_stream(
                     iter_audio=self.audio_generator(),
-                    client=client,
-                    model="stt-rt-v3"
+                    client=client
                 )
 
                 for result in result_iter:
