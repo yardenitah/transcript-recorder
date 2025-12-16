@@ -73,12 +73,9 @@ class AgoraManager:
                 logger.error(f"Failed to register audio observer, code={ret_observer}")
                 return False
 
-            # --- CRITICAL FIX ---
-            # We must configure the audio frame parameters, otherwise Agora won't send any data.
-            # 16000Hz, 1 Channel, Mode 0 (Raw), 320 Samples per callback (20ms)
-            self.connection.set_playback_audio_frame_parameters(16000, 1, 0, 320)
-            logger.info("✅ Audio frame parameters set: 16kHz, Mono, 20ms chunks")
-            # --------------------
+            # --- מחקנו את השורה הבעייתית מכאן ---
+            # ה-SDK הזה אמור להזרים PCM כברירת מחדל ברגע שנרשמנו
+            # -------------------------------------
 
             # 4. Connect to Agora
             logger.info(f"Connecting to Agora: channel={channel_name}, uid={uid}")
