@@ -89,7 +89,9 @@ class PcmAudioObserver(IAudioFrameObserver):
                 # Transcribe stream call (removed unsupported parameters like sample_rate)
                 result_iter = transcribe_stream(
                     iter_audio=self.audio_generator(),
-                    client=client
+                    client=client,
+                    model="stt-rt-preview",
+                    language="he"
                 )
 
                 for result in result_iter:
