@@ -11,7 +11,6 @@ from agora.rtc.audio_frame_observer import IAudioFrameObserver, AudioFrame
 logger = logging.getLogger(__name__)
 
 
-# --- Worker יחיד חכם לכל הערוץ ---
 class SonioxMixedWorker:
     def __init__(self):
         self.audio_queue: "queue.Queue[bytes]" = queue.Queue()
@@ -34,14 +33,13 @@ class SonioxMixedWorker:
 
         uri = "wss://stt-rt.soniox.com/transcribe-websocket"
 
-        # קונפיגורציה חכמה: אפשרנו Diarization כדי שסוניוקס יזהה מי מדבר
         config = {
             "api_key": api_key,
             "model": "stt-rt-preview",
             "audio_format": "pcm_s16le",
             "sample_rate": 16000,
             "num_channels": 1,
-            "enable_speaker_diarization": True,  # <--- הפיצ'ר החשוב!
+            "enable_speaker_diarization": True,
             "enable_language_identification": True,
             "language_hints": ["he"]
         }
@@ -51,31 +49,24 @@ class SonioxMixedWorker:
         while self.running:
             try:
                 with connect(uri) as websocket:
-                    logger.info("✅ Connected to Soniox (Mixed Stream)!")
+                    logger.info("✅ Connected to Soniox!")
                     websocket.send(json.dumps(config))
 
                     def read_task():
                         try:
                             for message in websocket:
                                 response = json.loads(message)
-
                                 tokens = response.get("tokens", [])
                                 final_text = ""
-
-                                # בדיקה מי הדובר הנוכחי לפי סוניוקס
                                 current_speaker = "?"
-
                                 for t in tokens:
                                     if t.get("is_final"):
                                         final_text += t.get("text", "")
-                                        # סוניוקס מחזיר מספר דובר (1, 2, 3...)
                                         spk = t.get("speaker", "?")
                                         current_speaker = f"Speaker {spk}"
-
                                 if final_text.strip():
                                     print(f"\n🎤 [{current_speaker}]: {final_text}")
                                     logger.info(f"TRANSCRIPT [{current_speaker}]: {final_text}")
-
                         except Exception as e:
                             logger.error(f"Read Error: {e}")
 
@@ -91,7 +82,6 @@ class SonioxMixedWorker:
                             websocket.send(silence)
                         except Exception:
                             break
-
             except Exception as e:
                 logger.error(f"Connection failed: {e}")
                 time.sleep(3)
@@ -102,20 +92,31 @@ class PcmAudioObserver(IAudioFrameObserver):
         super(PcmAudioObserver, self).__init__()
         self.worker = SonioxMixedWorker()
 
+    # --- DRAGNET: מימוש כל הפונקציות כדי לתפוס כל טיפת אודיו ---
 
     def on_playback_audio_frame(self, frame: AudioFrame) -> int:
         data = bytes(frame.buffer)
-
         if any(b != 0 for b in data[:100]):
-            print("!", end="", flush=True)
+            print("!", end="", flush=True)  # אודיו אמיתי!
+            self.worker.add_audio(data)
         else:
-            print(".", end="", flush=True)
-
-        self.worker.add_audio(data)
+            print(".", end="", flush=True)  # שקט
         return 1
 
-    # נטרלנו את הישן כדי למנוע בלבול
+    def on_mixed_audio_frame(self, frame: AudioFrame) -> int:
+        # לפעמים האודיו מגיע לכאן במקום ל-playback
+        data = bytes(frame.buffer)
+        if any(b != 0 for b in data[:100]):
+            print("M", end="", flush=True)  # M for Mixed
+            self.worker.add_audio(data)
+        return 1
+
     def on_playback_audio_frame_before_mixing(self, agora_local_user, channel_id, uid, frame):
+        # לפעמים זה עובד למשתמשים בודדים
+        # print(f"U{uid}", end="", flush=True)
+        return 1
+
+    def on_record_audio_frame(self, frame: AudioFrame) -> int:
         return 1
 
     def stop(self):
