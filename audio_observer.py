@@ -83,15 +83,16 @@ class PcmAudioObserver(IAudioFrameObserver):
         logger.info("Starting Soniox transcription thread...")
 
         try:
-            with SpeechClient() as client:
+            with SpeechClient() as client: # SpeechClient goes to the os and asking for SONIOX_API_KEY
                 logger.info("Connected to Soniox. Waiting for audio...")
 
                 # Transcribe stream call (removed unsupported parameters like sample_rate)
                 result_iter = transcribe_stream(
                     iter_audio=self.audio_generator(),
                     client=client,
-                    model="stt-rt-preview",
-                    language="he"
+                    model="stt-rt-v3",
+                    language_hints=['he'],
+                    enable_language_identification=True
                 )
 
                 for result in result_iter:
