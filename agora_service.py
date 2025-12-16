@@ -48,10 +48,8 @@ class AgoraManager:
             con_config.auto_subscribe_audio = 1
             con_config.auto_subscribe_video = 0
 
-            # --- התיקון הגדול: שינוי ל-AUDIENCE ---
-            con_config.client_role_type = 2  # AUDIENCE (היה 1)
-            # --------------------------------------
-
+            # MUST BE AUDIENCE TO RECEIVE AUDIO!
+            con_config.client_role_type = 2  # AUDIENCE
             con_config.channel_profile = 1  # LIVE_BROADCASTING
 
             # 2. Create Connection
@@ -69,19 +67,15 @@ class AgoraManager:
                 logger.error(f"Failed to register audio observer, code={ret_observer}")
                 return False
 
-            # הגדרת פרמטרים (נשארנו עם מה שעבד בלוגים הקודמים)
+            # 4. Set Audio Parameters via LocalUser (CRITICAL!)
             try:
                 local_user = self.connection.get_local_user()
                 local_user.set_playback_audio_frame_parameters(16000, 1, 0, 320)
                 logger.info("✅ Audio parameters set via get_local_user()!")
-            except AttributeError:
-                logger.warning("⚠️ set_playback_audio_frame_parameters not found on LocalUser.")
-                logger.info("🔍 DEBUG: Available methods on 'connection':")
-                logger.info(dir(self.connection))
             except Exception as e:
                 logger.warning(f"⚠️ Failed to set audio parameters: {e}")
 
-            # 4. Connect
+            # 5. Connect
             logger.info(f"Connecting to Agora: channel={channel_name}, uid={uid}")
             ret = self.connection.connect(token, channel_name, uid)
 
