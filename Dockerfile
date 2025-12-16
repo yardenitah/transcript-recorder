@@ -10,6 +10,7 @@ RUN apt-get update --allow-releaseinfo-change \
     libpulse0 \
     libssl-dev \
     ca-certificates \
+    libc++-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
