@@ -1,4 +1,3 @@
-# agora_service.py
 import logging
 from typing import Optional
 
@@ -8,8 +7,6 @@ from agora.rtc.agora_service import AgoraService, AgoraServiceConfig
 from agora.rtc.rtc_connection import RTCConnConfig
 from audio_observer import PcmAudioObserver
 
-# Try to import AgoraPublishConfig (exists only in SDK 1.x).
-# In SDK 2.x this class does not exist, so we fallback to None.
 logger = logging.getLogger(__name__)
 
 
@@ -29,15 +26,13 @@ class AgoraManager:
         config.enable_video = 0
         config.context = 0
 
-        # Different SDK versions use different field names, so we try both.
-        # One of them will be ignored if it does not exist.
         try:
-            config.app_id = app_id  # SDK 1.x style
+            config.app_id = app_id
         except AttributeError:
             pass
 
         try:
-            config.appid = app_id  # SDK 2.x style
+            config.appid = app_id
         except AttributeError:
             pass
 
@@ -58,28 +53,32 @@ class AgoraManager:
             con_config = RTCConnConfig()
             con_config.auto_subscribe_audio = 1
             con_config.auto_subscribe_video = 0
-            con_config.client_role_type = 1   # BROADCASTER
-            con_config.channel_profile = 1    # LIVE_BROADCASTING
+            con_config.client_role_type = 1  # BROADCASTER
+            con_config.channel_profile = 1  # LIVE_BROADCASTING
 
-            # 2. Create connection.
-            #    - SDK 1.x: create_rtc_connection(config, publish_config)
-            #    - SDK 2.x: create_rtc_connection(config)
-            # Likely SDK 1.x
+            # 2. Create connection
             pub_config = RtcConnectionPublishConfig()  # type: ignore
             self.connection = self.agora_service.create_rtc_connection(
                 con_config, pub_config
             )
-            logger.info("RTC connection created using publish_config (SDK 1.x style)")
+            logger.info("RTC connection created successfully")
 
             # 3. Register audio observer
             self.audio_observer = PcmAudioObserver(save_to_file=False)
-            # ret_observer = self.connection.register_audio_frame_observer(self.audio_observer)
-            # Pass 0, 0 to disable VAD (Voice Activity Detection) which is required by this SDK version
+
+            # Register observer (VAD=0,0)
             ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, 0, 0)
 
             if ret_observer < 0:
                 logger.error(f"Failed to register audio observer, code={ret_observer}")
                 return False
+
+            # --- CRITICAL FIX ---
+            # We must configure the audio frame parameters, otherwise Agora won't send any data.
+            # 16000Hz, 1 Channel, Mode 0 (Raw), 320 Samples per callback (20ms)
+            self.connection.set_playback_audio_frame_parameters(16000, 1, 0, 320)
+            logger.info("✅ Audio frame parameters set: 16kHz, Mono, 20ms chunks")
+            # --------------------
 
             # 4. Connect to Agora
             logger.info(f"Connecting to Agora: channel={channel_name}, uid={uid}")
