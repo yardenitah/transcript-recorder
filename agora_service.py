@@ -19,7 +19,7 @@ class AgoraManager:
     def initialize(self, app_id: str) -> None:
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
-        config.enable_audio_device = 0  # Headless mode (no crash)
+        config.enable_audio_device = 0  # Headless mode (נשאר 0)
         config.enable_video = 0
         config.context = 0
 
@@ -67,22 +67,23 @@ class AgoraManager:
                 logger.error(f"Failed to register audio observer, code={ret_observer}")
                 return False
 
-            # 4. Set Audio Parameters (THE FIX IS HERE)
+            # 4. Set Audio Parameters & EXTERNAL SINK
             try:
                 local_user = self.connection.get_local_user()
 
-                # הגדרות למיקסר (לא עובד בדוקר אבל שיהיה)
+                # --- התיקון הגרעיני: External Sink ---
+                # זה אומר לאגורה: "אל תחפש כרטיס קול, תזרים את המידע אליי!"
+                # הערה: הפרמטרים הם (enabled, sample_rate, channels)
+                local_user.set_external_audio_sink(True, 16000, 1)
+                logger.info("✅ External Audio Sink ENABLED!")
+
+                # הגדרות נוספות ליתר ביטחון
                 local_user.set_playback_audio_frame_parameters(16000, 1, 0, 320)
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 320)
-
-                # --- התיקון הקריטי: הגדרת פרמטרים ל-Before Mixing ---
-                # בלי זה, הפונקציה on_playback_audio_frame_before_mixing לא תיקרא בחיים!
                 local_user.set_playback_audio_frame_before_mixing_parameters(16000, 1)
 
-                # ליתר ביטחון, נרשום את הבוט לכל האודיו
                 local_user.subscribe_all_audio()
 
-                logger.info("✅ Audio parameters (including BeforeMixing) set successfully!")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to set audio parameters: {e}")
 
