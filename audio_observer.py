@@ -111,15 +111,27 @@ class PcmAudioObserver(IAudioFrameObserver):
     def _debug_frame(self, name, frame):
         try:
             self.frame_count += 1
-            # נדפיס רק את הפריים הראשון מכל סוג, וכל פריים 50 אחריו
-            if self.frame_count == 1 or self.frame_count % 50 == 0:
-                data = bytes(frame.buffer)
-                is_silent = all(b == 0 for b in data)
-                sample_preview = list(data[:5])
-                logger.info(f"[CALLBACK] {name} | Size: {len(data)} | Silent: {is_silent} | Samples: {sample_preview}")
-            return bytes(frame.buffer)
+            data = bytes(frame.buffer)
+            is_silent = all(b == 0 for b in data)
+            
+            # Calculate audio level (RMS) to detect if there's actual audio
+            if len(data) > 0:
+                import struct
+                samples = struct.unpack(f'<{len(data)//2}h', data[:len(data)//2*2])
+                rms = int((sum(s*s for s in samples) / len(samples)) ** 0.5) if samples else 0
+            else:
+                rms = 0
+            
+            # Log first frame, every 100th frame, or when non-silent audio is detected
+            if self.frame_count == 1 or self.frame_count % 100 == 0 or (not is_silent and rms > 100):
+                sample_preview = list(data[:10])
+                logger.info(f"[CALLBACK] {name} | Frame #{self.frame_count} | Size: {len(data)} | Silent: {is_silent} | RMS: {rms} | Samples: {sample_preview}")
+            
+            return data
         except Exception as e:
             logger.error(f"Error reading frame in {name}: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return b''
 
     def on_playback_audio_frame(self, frame: AudioFrame) -> int:
@@ -140,14 +152,30 @@ class PcmAudioObserver(IAudioFrameObserver):
         # כאן הלוגיקה קצת שונה כי יש UID
         try:
             data = bytes(frame.buffer)
-            # לוג רק אם יש דאטה לא שקט
-            if any(b != 0 for b in data[:50]):
-                logger.info(f"[CALLBACK] on_playback_audio_frame_before_mixing | UID: {uid} | SOUND DETECTED!")
-                self.worker.add_audio(data, f"user_{uid}")
-            elif self.frame_count % 100 == 0:
-                logger.debug(f"[CALLBACK] on_playback_audio_frame_before_mixing | UID: {uid} | Silence...")
+            
+            # Calculate RMS to detect actual audio
+            if len(data) > 0:
+                import struct
+                samples = struct.unpack(f'<{len(data)//2}h', data[:len(data)//2*2])
+                rms = int((sum(s*s for s in samples) / len(samples)) ** 0.5) if samples else 0
+            else:
+                rms = 0
+            
+            # Always send audio to Soniox (even silence), but log when we detect real audio
+            if rms > 100:  # Threshold for detecting actual audio
+                logger.info(f"[CALLBACK] on_playback_audio_frame_before_mixing | UID: {uid} | RMS: {rms} | 🔊 AUDIO DETECTED!")
+            
+            # Send all audio data (including silence) to maintain stream continuity
+            self.worker.add_audio(data, f"user_{uid}")
+            
+            # Log periodically even for silence
+            if self.frame_count % 200 == 0:
+                logger.debug(f"[CALLBACK] on_playback_audio_frame_before_mixing | UID: {uid} | RMS: {rms} | Frames processed: {self.frame_count}")
+                
         except Exception as e:
             logger.error(f"Error in before_mixing: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
         return 1
 
     def on_ear_monitoring_audio_frame(self, frame: AudioFrame) -> int:
