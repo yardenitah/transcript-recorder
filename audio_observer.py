@@ -39,7 +39,7 @@ class SonioxMixedWorker:
             "audio_format": "pcm_s16le",
             "sample_rate": 16000,
             "num_channels": 1,
-            "enable_speaker_diarization": True,
+            "enable_speaker_diarization": True, # Enable speaker identification
             "enable_language_identification": True,
             "language_hints": ["he"]
         }
@@ -79,7 +79,7 @@ class SonioxMixedWorker:
                             chunk = self.audio_queue.get(timeout=0.1)
                             websocket.send(chunk)
                         except queue.Empty:
-                            websocket.send(silence)
+                            websocket.send(silence) # Keep alive
                         except Exception:
                             break
             except Exception as e:
@@ -92,28 +92,27 @@ class PcmAudioObserver(IAudioFrameObserver):
         super(PcmAudioObserver, self).__init__()
         self.worker = SonioxMixedWorker()
 
-    # --- DRAGNET: מימוש כל הפונקציות כדי לתפוס כל טיפת אודיו ---
+    # --- DRAGNET: Implement all callbacks to capture any available audio ---
 
     def on_playback_audio_frame(self, frame: AudioFrame) -> int:
         data = bytes(frame.buffer)
         if any(b != 0 for b in data[:100]):
-            print("!", end="", flush=True)  # אודיו אמיתי!
+            print("!", end="", flush=True)  # Visual indicator: Real Audio
             self.worker.add_audio(data)
         else:
-            print(".", end="", flush=True)  # שקט
+            print(".", end="", flush=True)  # Visual indicator: Silence
         return 1
 
     def on_mixed_audio_frame(self, frame: AudioFrame) -> int:
-        # לפעמים האודיו מגיע לכאן במקום ל-playback
+        # Sometimes audio arrives here instead of playback
         data = bytes(frame.buffer)
         if any(b != 0 for b in data[:100]):
-            print("M", end="", flush=True)  # M for Mixed
+            print("M", end="", flush=True)  # M for Mixed Audio
             self.worker.add_audio(data)
         return 1
 
     def on_playback_audio_frame_before_mixing(self, agora_local_user, channel_id, uid, frame):
-        # לפעמים זה עובד למשתמשים בודדים
-        # print(f"U{uid}", end="", flush=True)
+        # Placeholder for individual stream processing if needed later
         return 1
 
     def on_record_audio_frame(self, frame: AudioFrame) -> int:

@@ -19,7 +19,7 @@ class AgoraManager:
     def initialize(self, app_id: str) -> None:
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
-        config.enable_audio_device = 0  # נשאר 0 כדי לא לקרוס
+        config.enable_audio_device = 0  # Set to 0 to prevent crash in Docker (Headless)
         config.enable_video = 0
         config.context = 0
 
@@ -43,11 +43,11 @@ class AgoraManager:
             return False
 
         try:
-            # 1. Config
+            # 1. RTC connection config
             con_config = RTCConnConfig()
             con_config.auto_subscribe_audio = 1
             con_config.auto_subscribe_video = 0
-            con_config.client_role_type = 2  # AUDIENCE
+            con_config.client_role_type = 2  # AUDIENCE role is required to receive streams
             con_config.channel_profile = 1  # LIVE_BROADCASTING
 
             # 2. Create Connection
@@ -60,8 +60,8 @@ class AgoraManager:
             # 3. Register Observer
             self.audio_observer = PcmAudioObserver(save_to_file=False)
 
-            # --- התיקון הקריטי כאן ---
-            # משנים את ה-Mask מ-0 ל-15 (0b1111) כדי לתפוס את כל סוגי האודיו
+            # --- CRITICAL FIX: Observer Mask ---
+            # Set mask to 15 (binary 1111) to capture ALL audio types:
             # (Playback | Record | Mixed | BeforeMixing)
             ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, 15, 0)
 
@@ -69,12 +69,12 @@ class AgoraManager:
                 logger.error(f"Failed to register audio observer, code={ret_observer}")
                 return False
 
-            # 4. Set Parameters
+            # 4. Set Audio Parameters
             try:
                 local_user = self.connection.get_local_user()
-                # הגדרת פרמטרים גם ל-Playback וגם ל-Mixed
+                # Set parameters for both Playback and Mixed streams to ensure data flow
                 local_user.set_playback_audio_frame_parameters(16000, 1, 0, 320)
-                local_user.set_mixed_audio_frame_parameters(16000, 1, 320)  # הוספנו גם את זה ליתר ביטחון
+                local_user.set_mixed_audio_frame_parameters(16000, 1, 320)
                 logger.info("✅ Audio parameters set via get_local_user()!")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to set audio parameters: {e}")
