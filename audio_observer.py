@@ -77,30 +77,27 @@ class PcmAudioObserver(IAudioFrameObserver):
                 yield silence_chunk
 
     def run_soniox_transcription(self):
-        """
-        Background loop that connects to Soniox and prints recognized words.
-        Requires SONIOX_API_KEY to be set in the environment.
-        """
         logger.info("Starting Soniox transcription thread...")
 
         try:
-            with SpeechClient() as client: # SpeechClient goes to the os and asking for SONIOX_API_KEY
+            with SpeechClient() as client:
                 logger.info("Connected to Soniox. Waiting for audio...")
 
+                # 1. הדפסת דיבאג שתגלה לנו את האמת על הפרמטרים
+                import inspect
                 sig = inspect.signature(transcribe_stream)
-                print(f"🕵️ FUNCTION SIGNATURE: {sig}")
-                # ---------------------------------
+                print(f"🕵️ DEBUG: FUNCTION SIGNATURE: {sig}")
 
+                # 2. שימוש במודל הכי יציב שיש
                 result_iter = transcribe_stream(
                     iter_audio=self.audio_generator(),
-                    client=client
+                    client=client,
+                    model="stt-rt"  # <--- זה השינוי הקריטי
                 )
 
                 for result in result_iter:
                     for word in result.words:
-                        text = word.text
-                        # Print the final word clearly
-                        print(f"🔤 Final Word: {text}")
+                        print(f"🔤 Final Word: {word.text}")
 
         except Exception as e:
             logger.error(f"Soniox error: {e}")
