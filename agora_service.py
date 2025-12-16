@@ -43,12 +43,16 @@ class AgoraManager:
             return False
 
         try:
-            # 1. Config
+            # 1. RTC connection config
             con_config = RTCConnConfig()
             con_config.auto_subscribe_audio = 1
             con_config.auto_subscribe_video = 0
-            con_config.client_role_type = 1
-            con_config.channel_profile = 1
+
+            # --- התיקון הגדול: שינוי ל-AUDIENCE ---
+            con_config.client_role_type = 2  # AUDIENCE (היה 1)
+            # --------------------------------------
+
+            con_config.channel_profile = 1  # LIVE_BROADCASTING
 
             # 2. Create Connection
             pub_config = RtcConnectionPublishConfig()  # type: ignore
@@ -65,21 +69,17 @@ class AgoraManager:
                 logger.error(f"Failed to register audio observer, code={ret_observer}")
                 return False
 
-            # --- TENTATIVE FIX: Set Audio Parameters via Local User ---
+            # הגדרת פרמטרים (נשארנו עם מה שעבד בלוגים הקודמים)
             try:
-                # בדרך כלל הפונקציה נמצאת בתוך get_local_user()
                 local_user = self.connection.get_local_user()
                 local_user.set_playback_audio_frame_parameters(16000, 1, 0, 320)
                 logger.info("✅ Audio parameters set via get_local_user()!")
             except AttributeError:
                 logger.warning("⚠️ set_playback_audio_frame_parameters not found on LocalUser.")
-
-                # --- DEBUG: הדפסת כל הפונקציות הקיימות כדי שלא ננחש ---
                 logger.info("🔍 DEBUG: Available methods on 'connection':")
                 logger.info(dir(self.connection))
             except Exception as e:
                 logger.warning(f"⚠️ Failed to set audio parameters: {e}")
-            # -----------------------------------------------------------
 
             # 4. Connect
             logger.info(f"Connecting to Agora: channel={channel_name}, uid={uid}")
