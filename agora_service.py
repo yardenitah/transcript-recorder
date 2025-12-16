@@ -19,7 +19,7 @@ class AgoraManager:
     def initialize(self, app_id: str) -> None:
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
-        config.enable_audio_device = 0  # Set to 0 to prevent crash in Docker (Headless)
+        config.enable_audio_device = 0  # Headless mode (no crash)
         config.enable_video = 0
         config.context = 0
 
@@ -43,11 +43,11 @@ class AgoraManager:
             return False
 
         try:
-            # 1. RTC connection config
+            # 1. Config
             con_config = RTCConnConfig()
             con_config.auto_subscribe_audio = 1
             con_config.auto_subscribe_video = 0
-            con_config.client_role_type = 2  # AUDIENCE role is required to receive streams
+            con_config.client_role_type = 2  # AUDIENCE
             con_config.channel_profile = 1  # LIVE_BROADCASTING
 
             # 2. Create Connection
@@ -60,22 +60,29 @@ class AgoraManager:
             # 3. Register Observer
             self.audio_observer = PcmAudioObserver(save_to_file=False)
 
-            # --- CRITICAL FIX: Observer Mask ---
-            # Set mask to 15 (binary 1111) to capture ALL audio types:
-            # (Playback | Record | Mixed | BeforeMixing)
+            # Mask 15 = Listen to everything
             ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, 15, 0)
 
             if ret_observer < 0:
                 logger.error(f"Failed to register audio observer, code={ret_observer}")
                 return False
 
-            # 4. Set Audio Parameters
+            # 4. Set Audio Parameters (THE FIX IS HERE)
             try:
                 local_user = self.connection.get_local_user()
-                # Set parameters for both Playback and Mixed streams to ensure data flow
+
+                # הגדרות למיקסר (לא עובד בדוקר אבל שיהיה)
                 local_user.set_playback_audio_frame_parameters(16000, 1, 0, 320)
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 320)
-                logger.info("✅ Audio parameters set via get_local_user()!")
+
+                # --- התיקון הקריטי: הגדרת פרמטרים ל-Before Mixing ---
+                # בלי זה, הפונקציה on_playback_audio_frame_before_mixing לא תיקרא בחיים!
+                local_user.set_playback_audio_frame_before_mixing_parameters(16000, 1)
+
+                # ליתר ביטחון, נרשום את הבוט לכל האודיו
+                local_user.subscribe_all_audio()
+
+                logger.info("✅ Audio parameters (including BeforeMixing) set successfully!")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to set audio parameters: {e}")
 
