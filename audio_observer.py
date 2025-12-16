@@ -1,6 +1,7 @@
 import logging
 import queue
 import threading
+import inspect
 
 # Note: In newer SDK versions imports might differ, but this works for your current setup
 from agora.rtc.audio_frame_observer import IAudioFrameObserver, AudioFrame
@@ -86,13 +87,14 @@ class PcmAudioObserver(IAudioFrameObserver):
             with SpeechClient() as client: # SpeechClient goes to the os and asking for SONIOX_API_KEY
                 logger.info("Connected to Soniox. Waiting for audio...")
 
-                # Transcribe stream call (removed unsupported parameters like sample_rate)
+                sig = inspect.signature(transcribe_stream)
+                print(f"🕵️ FUNCTION SIGNATURE: {sig}")
+                # ---------------------------------
+
                 result_iter = transcribe_stream(
                     iter_audio=self.audio_generator(),
                     client=client,
-                    model="stt-rt-v3",
-                    language_hints=['he'],
-                    enable_language_identification=True
+                    model="stt-rt-v3"
                 )
 
                 for result in result_iter:
