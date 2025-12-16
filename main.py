@@ -3,7 +3,7 @@ import os
 import traceback
 
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  # <--- Required for browser access
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from agora_service import AgoraManager
@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# --- CORS Configuration: Allows the browser client to communicate with the server ---
+# --- CORS Configuration: Allows browser client access ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict this. For development, "*" is fine.
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,7 +29,7 @@ class ConnectionRequest(BaseModel):
     token: str
 
 
-# Load Agora App ID from environment (with fallback for local testing)
+# Load Agora App ID from environment
 APP_ID = os.getenv("AGORA_APP_ID")
 if not APP_ID:
     APP_ID = "5deec9e3974849299a1e0a770fcca06d"
@@ -40,13 +40,11 @@ agora_manager = AgoraManager()
 agora_manager.initialize(APP_ID)
 
 
-# --- Configuration Endpoint ---
+# --- Configuration Endpoint for the Browser Client ---
 @app.get("/agora-config")
 def get_agora_config():
-    # We fetch configuration from environment variables (since we don't use a settings object)
     return {
         "app_id": APP_ID,
-        # If the environment variable doesn't exist, return a default value for testing
         "channel": os.getenv("AGORA_CHANNEL_NAME", "test123"),
         "token": os.getenv("AGORA_TOKEN", ""),
         "recorder_uid": os.getenv("AGORA_RECORDER_UID", "555")
@@ -78,13 +76,10 @@ def start_bot(request: ConnectionRequest):
         }
 
     except HTTPException:
-        # Re-raise HTTPException as-is so FastAPI handles it correctly
         raise
     except Exception as e:
-        # Any unexpected error – include traceback for debugging
         stack = traceback.format_exc()
         logger.error("CRITICAL ERROR in /start:\n%s", stack)
-
         raise HTTPException(
             status_code=500,
             detail={
@@ -97,7 +92,7 @@ def start_bot(request: ConnectionRequest):
 @app.post("/stop")
 def stop_bot():
     """
-    Stop the current RTC connection and release resources.
+    Stop the current RTC connection.
     """
     agora_manager.stop_connection()
     return {"status": "disconnected"}

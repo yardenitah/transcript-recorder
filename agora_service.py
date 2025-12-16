@@ -19,7 +19,11 @@ class AgoraManager:
     def initialize(self, app_id: str) -> None:
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
-        config.enable_audio_device = 1
+
+        # --- CRITICAL: Set to 0 to prevent Segmentation Faults in Docker ---
+        config.enable_audio_device = 0
+        # -------------------------------------------------------------------
+
         config.enable_video = 0
         config.context = 0
 
@@ -43,7 +47,7 @@ class AgoraManager:
             return False
 
         try:
-            # 1. Config
+            # 1. RTC Connection Config
             con_config = RTCConnConfig()
             con_config.auto_subscribe_audio = 1
             con_config.auto_subscribe_video = 0
@@ -51,16 +55,16 @@ class AgoraManager:
             con_config.channel_profile = 1  # LIVE_BROADCASTING
 
             # 2. Create Connection
-            pub_config = RtcConnectionPublishConfig()  # type: ignore
+            pub_config = RtcConnectionPublishConfig()
             self.connection = self.agora_service.create_rtc_connection(
                 con_config, pub_config
             )
             logger.info("RTC connection created successfully")
 
-            # 3. Register Observer
+            # 3. Register Audio Observer
             self.audio_observer = PcmAudioObserver(save_to_file=False)
 
-            # Mask 15 = Listen to everything
+            # Mask 15 = Listen to ALL audio events (Playback, Record, Mixed, BeforeMixing)
             ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, 15, 0)
 
             if ret_observer < 0:
@@ -71,22 +75,21 @@ class AgoraManager:
             try:
                 local_user = self.connection.get_local_user()
 
-                # Configure audio frame parameters for playback
-                # These settings ensure we receive audio at 16kHz mono (required for Soniox)
+                # Standard parameters (Mixer might be disabled in headless, but good to have)
                 local_user.set_playback_audio_frame_parameters(16000, 1, 0, 320)
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 320)
+
+                # --- CRITICAL: Set parameters for 'Before Mixing' callback ---
+                # This is often the only callback that works in headless mode
                 local_user.set_playback_audio_frame_before_mixing_parameters(16000, 1)
 
-                # Subscribe to all remote audio streams
+                # Subscribe to everything
                 local_user.subscribe_all_audio()
-                logger.info("✅ Audio parameters configured and subscribed to all audio")
-
+                logger.info("✅ Audio parameters set successfully")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to set audio parameters: {e}")
-                import traceback
-                logger.debug(traceback.format_exc())
 
-            # 5. Connect
+            # 5. Connect to Channel
             logger.info(f"Connecting to Agora: channel={channel_name}, uid={uid}")
             ret = self.connection.connect(token, channel_name, uid)
 
