@@ -1,9 +1,8 @@
-# audio_observer.py
-
 import logging
 import queue
 import threading
 
+# Note: In newer SDK versions imports might differ, but this works for your current setup
 from agora.rtc.audio_frame_observer import IAudioFrameObserver, AudioFrame
 from soniox.transcribe_live import transcribe_stream
 from soniox.speech_service import SpeechClient
@@ -38,21 +37,22 @@ class PcmAudioObserver(IAudioFrameObserver):
         self.transcription_thread.start()
 
     def on_playback_audio_frame_before_mixing(
-        self,
-        agora_local_user,
-        channel_id: str,
-        uid: str,
-        frame: AudioFrame,
+            self,
+            agora_local_user,
+            channel_id: str,
+            uid: str,
+            frame: AudioFrame,
     ) -> int:
         """
         Called by Agora every ~10 ms with a new chunk of PCM audio.
-        We must return quickly and avoid heavy work in this callback,
-        so we only enqueue the frame and return.
         """
         if self.running:
             # frame.buffer is a memoryview; convert to immutable bytes
             data = bytes(frame.buffer)
             self.audio_queue.put(data)
+
+            # Optional: Visual print to indicate Agora is streaming data
+            # print(".", end="", flush=True) 
 
         # 1 = continue processing
         return 1
@@ -60,13 +60,20 @@ class PcmAudioObserver(IAudioFrameObserver):
     def audio_generator(self):
         """
         Generator used by Soniox: pulls audio chunks from the queue.
+        FIX: Inject silence when queue is empty to prevent Soniox timeout.
         """
+        # 3200 bytes = 1600 samples (16-bit) = 100ms of audio at 16kHz
+        silence_chunk = b'\x00' * 3200
+
         while self.running:
             try:
-                chunk = self.audio_queue.get(timeout=1)
+                # Wait for real audio (max 0.1 seconds)
+                chunk = self.audio_queue.get(timeout=0.1)
                 yield chunk
             except queue.Empty:
-                continue
+                # If 0.1s passed and no audio (silence) - send "artificial silence"
+                # This keeps the Soniox connection alive!
+                yield silence_chunk
 
     def run_soniox_transcription(self):
         """
@@ -79,21 +86,20 @@ class PcmAudioObserver(IAudioFrameObserver):
             with SpeechClient() as client:
                 logger.info("Connected to Soniox. Waiting for audio...")
 
+                # Transcribe stream call (removed unsupported parameters like sample_rate)
                 result_iter = transcribe_stream(
                     iter_audio=self.audio_generator(),
-                    client=client,
-                    # sample_rate=16000,      # Must match Agora PCM config
-                    # num_audio_channels=1,
+                    client=client
                 )
 
                 for result in result_iter:
                     for word in result.words:
                         text = word.text
+                        # Print the final word clearly
                         print(f"🔤 Final Word: {text}")
-                        # Here you can later send text to DB, queue, or HTTP callback
 
         except Exception as e:
-            logger.error("Soniox error: %s", e)
+            logger.error(f"Soniox error: {e}")
 
     def stop(self):
         """
