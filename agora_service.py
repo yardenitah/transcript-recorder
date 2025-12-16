@@ -73,7 +73,9 @@ class AgoraManager:
 
             # 3. Register audio observer
             self.audio_observer = PcmAudioObserver(save_to_file=False)
-            ret_observer = self.connection.register_audio_frame_observer(self.audio_observer)
+            # ret_observer = self.connection.register_audio_frame_observer(self.audio_observer)
+            # Pass 0, 0 to disable VAD (Voice Activity Detection) which is required by this SDK version
+            ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, 0, 0)
 
             if ret_observer < 0:
                 logger.error(f"Failed to register audio observer, code={ret_observer}")

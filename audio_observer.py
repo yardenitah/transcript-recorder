@@ -82,8 +82,8 @@ class PcmAudioObserver(IAudioFrameObserver):
                 result_iter = transcribe_stream(
                     iter_audio=self.audio_generator(),
                     client=client,
-                    sample_rate=16000,      # Must match Agora PCM config
-                    num_audio_channels=1,
+                    # sample_rate=16000,      # Must match Agora PCM config
+                    # num_audio_channels=1,
                 )
 
                 for result in result_iter:
