@@ -1,13 +1,12 @@
 import logging
 from typing import Optional
 
-# Import necessary Agora classes
 from agora.rtc.agora_base import RtcConnectionPublishConfig, AudioSubscriptionOptions
 from agora.rtc.agora_service import AgoraService, AgoraServiceConfig
 from agora.rtc.rtc_connection import RTCConnConfig
 from audio_observer import PcmAudioObserver
 
-# Set logging to DEBUG to see everything
+# DEBUG level for maximum visibility
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -24,10 +23,8 @@ class AgoraManager:
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
 
-        # --- CRITICAL FIX: TRICK THE SERVER ---
-        # We enable the audio device even on a headless server.
-        # This forces the SDK to initialize the audio pipeline.
-        config.enable_audio_device = 1
+        # --- FIX: Set to 0 to prevent Linux Crash ---
+        config.enable_audio_device = 0
 
         config.enable_video = 0
         config.context = 0
@@ -43,7 +40,7 @@ class AgoraManager:
 
         self.agora_service = AgoraService()
         self.agora_service.initialize(config)
-        logger.info("✅ [Manager] Service Initialized (Audio Device ENABLED)")
+        logger.info("✅ [Manager] Service Initialized (Headless Mode)")
 
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
         logger.info(f"🔹 [Manager] Starting Connection: {channel_name} / {uid}")
@@ -55,10 +52,12 @@ class AgoraManager:
         try:
             # 1. Config
             con_config = RTCConnConfig()
+            # CRITICAL: We must auto-subscribe to receive audio
             con_config.auto_subscribe_audio = 1
             con_config.auto_subscribe_video = 0
-            con_config.client_role_type = 1  # BROADCASTER
-            con_config.channel_profile = 1  # LIVE_BROADCASTING
+            # Broadcaster receives data reliably even if mute
+            con_config.client_role_type = 1
+            con_config.channel_profile = 1
 
             # 2. Create Connection
             pub_config = RtcConnectionPublishConfig()
@@ -68,29 +67,27 @@ class AgoraManager:
             logger.debug("✅ [Manager] Connection Created")
 
             # 3. Register Audio Observer
-            logger.debug("🔹 [Manager] Registering Audio Observer...")
             self.audio_observer = PcmAudioObserver(save_to_file=False)
 
-            # Mask 4 = MIXED AUDIO. This is the standard pipeline output.
+            # Mask 4 (Mixed Audio) is the standard for server-side listening
             ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, 4, 0)
 
             if ret_observer < 0:
-                logger.error(f"❌ [Manager] Register failed: {ret_observer}")
+                logger.error(f"❌ [Manager] Register observer failed: {ret_observer}")
                 return False
             else:
-                logger.info("✅ [Manager] Observer Registered (Mask 4 - MIXED)")
+                logger.info("✅ [Manager] Observer Registered (Mask 4 - Mixed)")
 
             # 4. Set Audio Parameters
             try:
-                logger.debug("🔹 [Manager] Setting Audio Params...")
                 local_user = self.connection.get_local_user()
 
-                # Set Mixed Audio parameters (16k, Mono, 10ms)
+                # We specifically want the MIXED stream (what everyone else hears)
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
 
-                # Also subscribe explicitly
+                # Double check subscription
                 local_user.subscribe_all_audio()
-                logger.info("✅ [Manager] Audio Params Set (Mixed Only)")
+                logger.info("✅ [Manager] Audio Params Set (Mixed 16k)")
 
             except Exception as e:
                 logger.warning(f"⚠️ [Manager] Audio Params Warning: {e}")
@@ -113,7 +110,6 @@ class AgoraManager:
             return False
 
     def stop_connection(self) -> None:
-        logger.info("🔹 [Manager] Stopping...")
         if self.connection:
             if self.audio_observer:
                 try:
@@ -125,5 +121,3 @@ class AgoraManager:
             self.connection.disconnect()
             self.connection = None
             logger.info("🛑 [Manager] Disconnected")
-
-            # BB 
