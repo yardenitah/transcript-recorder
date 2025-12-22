@@ -10,46 +10,44 @@ import struct
 from websockets.sync.client import connect
 from agora.rtc.audio_frame_observer import IAudioFrameObserver, AudioFrame
 
-# Initialize Logging
-# Using INFO level to avoid binary data spam from internal libraries
-logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-logger = logging.getLogger("AUDIO_PROCESSOR")
+# --- FULL DEBUG MODE ---
+# זה יגרום לספריית websockets להדפיס את כל ה-BINARY 00 00
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+logger = logging.getLogger("AUDIO_DEBUG")
 
 
 class SonioxMixedWorker:
-    """
-    Handles buffering audio chunks and sending them to Soniox STT via WebSocket.
-    """
-
     def __init__(self):
         self.audio_queue: "queue.Queue[bytes]" = queue.Queue()
         self.running = True
-        logger.info("🔹 Starting SonioxMixedWorker thread...")
+        logger.debug("🔹 [Worker] Initializing thread...")
         self.thread = threading.Thread(target=self._run_websocket_loop, daemon=True)
         self.thread.start()
 
     def add_audio(self, data: bytes, source: str):
-        # Prevent queue from exploding if websocket gets stuck
+        # UNCOMMENTED: Log every audio packet added to queue
+        logger.debug(f"➕ [Queue] Adding audio from {source} (Size: {len(data)})")
+
         if self.audio_queue.qsize() > 2000:
             try:
                 self.audio_queue.get_nowait()
             except queue.Empty:
                 pass
-
         self.audio_queue.put(data)
 
     def stop(self):
+        logger.debug("🛑 [Worker] Stopping...")
         self.running = False
         self.thread.join(timeout=1)
 
     def _run_websocket_loop(self):
         api_key = os.environ.get("SONIOX_API_KEY")
         if not api_key:
-            logger.error("❌ Missing SONIOX_API_KEY environment variable")
+            logger.error("❌ [Worker] Missing SONIOX_API_KEY")
             return
 
         uri = "wss://stt-rt.soniox.com/transcribe-websocket"
-        logger.info(f"🔄 Worker: Connecting to Soniox API...")
+        logger.info(f"🔄 [Worker] Connecting to Soniox API: {uri}")
 
         config = {
             "api_key": api_key,
@@ -64,62 +62,59 @@ class SonioxMixedWorker:
 
         while self.running:
             try:
-                # ping_interval=None prevents 'keepalive ping timeout' errors
                 with connect(uri, ping_interval=None) as websocket:
-                    logger.info("✅ Worker: Connected to Soniox WebSocket!")
+                    logger.info("✅ [Worker] WebSocket Connected!")
+
+                    logger.debug(f"📤 [Worker] Sending Config: {json.dumps(config)}")
                     websocket.send(json.dumps(config))
 
-                    # Sub-thread to read responses from Soniox
                     def read_task():
-                        logger.info("🔹 Reader Task: Started listening for transcripts...")
+                        logger.debug("🔹 [Reader] Started listening...")
                         while True:
                             try:
                                 for message in websocket:
+                                    # UNCOMMENTED: Log raw messages from Soniox
+                                    logger.debug(f"📥 [Reader] Raw msg: {message}")
+
                                     response = json.loads(message)
                                     tokens = response.get("tokens", [])
                                     final_text = ""
                                     current_speaker = "?"
-
                                     for t in tokens:
                                         if t.get("is_final"):
                                             final_text += t.get("text", "")
                                             spk = t.get("speaker", "?")
                                             current_speaker = f"Speaker {spk}"
-
                                     if final_text.strip():
                                         print(f"\n🎤 [{current_speaker}]: {final_text}")
-
                             except Exception as e:
-                                logger.error(f"❌ Reader Task Error: {e}")
+                                logger.error(f"❌ [Reader] Error: {e}")
                                 break
 
                     reader = threading.Thread(target=read_task, daemon=True)
                     reader.start()
 
-                    # Silence packet to keep connection alive when no one talks
                     silence = b'\x00' * 3200
 
-                    logger.info("🔹 Worker: Starting audio stream loop...")
+                    logger.debug("🔹 [Worker] Starting transmit loop...")
                     while self.running:
                         try:
-                            # Try to get real audio with a short timeout
-                            chunk = self.audio_queue.get(timeout=0.02)  # 20ms wait
+                            chunk = self.audio_queue.get(timeout=0.02)
 
-                            # Log periodically to show data flow
-                            if self.audio_queue.qsize() % 50 == 0:
-                                logger.info(f"📤 Sending audio chunk to Soniox (Size: {len(chunk)} bytes)")
+                            # UNCOMMENTED: Log sending real audio
+                            logger.debug(f"⚡ [Worker] Sending {len(chunk)} bytes to Soniox")
 
                             websocket.send(chunk)
-
                         except queue.Empty:
-                            # Send silence if queue is empty (Keep-Alive)
+                            # UNCOMMENTED: Log sending silence
+                            logger.debug("💤 [Worker] Queue empty, sending silence")
                             websocket.send(silence)
                         except Exception as e:
-                            logger.error(f"❌ Send Loop Error: {e}")
+                            logger.error(f"❌ [Worker] Send Loop Error: {e}")
                             break
 
             except Exception as e:
-                logger.error(f"⚠️ Worker: Connection failed (retrying in 3s): {e}")
+                logger.error(f"⚠️ [Worker] Connection failed: {e}")
                 time.sleep(3)
 
 
@@ -128,18 +123,16 @@ class PcmAudioObserver(IAudioFrameObserver):
         super(PcmAudioObserver, self).__init__()
         self.worker = SonioxMixedWorker()
         self.frame_count = 0
-        logger.info("✅ PcmAudioObserver INITIALIZED")
+        logger.info("✅ [Observer] Initialized")
 
     def _process_frame(self, name, frame):
         try:
             self.frame_count += 1
             data = bytes(frame.buffer)
 
-            # Debug log to verify frames are arriving (every 100 frames)
-            if self.frame_count % 100 == 0:
-                logger.info(f"🎧 Agora Audio Frame Received: {name} | Bytes: {len(data)}")
+            # UNCOMMENTED: Log every single frame arrival
+            logger.debug(f"👂 [Observer] Got Frame from '{name}' | Size: {len(data)}")
 
-            # --- RMS Calculation (Voice Activity Detection) ---
             rms = 0
             if len(data) > 0:
                 count = len(data) // 2
@@ -148,36 +141,33 @@ class PcmAudioObserver(IAudioFrameObserver):
                 import math
                 rms = math.sqrt(sum_squares / count)
 
-            # If sound is loud enough, send to Soniox
             if rms > 100:
-                # Optional: Uncomment to see noisy frames
-                # logger.debug(f"🔊 Sound detected in {name} (RMS: {int(rms)})")
+                logger.debug(f"🔊 [Observer] SOUND DETECTED in {name}! (RMS: {int(rms)})")
                 self.worker.add_audio(data, name)
 
-            # Send 'before_mixing' always (safety net)
-            if "before_mixing" in name:
+            # Always send Mixed/BeforeMixing
+            if "mixed" in name or "before_mixing" in name:
                 self.worker.add_audio(data, name)
 
             return 1
         except Exception as e:
-            logger.error(f"❌ Error processing frame in {name}: {e}")
+            logger.error(f"❌ [Observer] Error in {name}: {e}")
             return 1
 
-    # --- CORRECTED CALLBACK SIGNATURES (IMPORTANT) ---
-
     def on_playback_audio_frame(self, agora_local_user, channelId, frame):
-        logger.debug(f"🔵 Callback: Playback")
+        logger.debug("🔵 Callback: Playback")  # <--- OPEN
         return self._process_frame("on_playback", frame)
 
     def on_record_audio_frame(self, agora_local_user, channelId, frame):
+        logger.debug("🔴 Callback: Record")  # <--- OPEN
         return 1
 
     def on_mixed_audio_frame(self, agora_local_user, channelId, frame):
-        logger.debug(f"🟣 Callback: Mixed")
+        logger.debug("🟣 Callback: Mixed")  # <--- OPEN
         return self._process_frame("on_mixed", frame)
 
     def on_playback_audio_frame_before_mixing(self, agora_local_user, channel_id, uid, frame):
-        logger.debug(f"🟠 Callback: Before Mixing (UID: {uid})")
+        logger.debug(f"🟠 Callback: BeforeMixing (UID: {uid})")  # <--- OPEN
         return self._process_frame(f"before_mixing_u{uid}", frame)
 
     def on_ear_monitoring_audio_frame(self, agora_local_user, frame):
