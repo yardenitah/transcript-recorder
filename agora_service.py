@@ -19,11 +19,7 @@ class AgoraManager:
     def initialize(self, app_id: str) -> None:
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
-
-        # --- CRITICAL: Set to 0 to prevent Segmentation Faults in Docker ---
         config.enable_audio_device = 0
-        # -------------------------------------------------------------------
-
         config.enable_video = 0
         config.context = 0
 
@@ -47,7 +43,7 @@ class AgoraManager:
             return False
 
         try:
-            # 1. RTC Connection Config
+            # 1. Config
             con_config = RTCConnConfig()
             con_config.auto_subscribe_audio = 1
             con_config.auto_subscribe_video = 0
@@ -55,41 +51,43 @@ class AgoraManager:
             con_config.channel_profile = 1  # LIVE_BROADCASTING
 
             # 2. Create Connection
-            pub_config = RtcConnectionPublishConfig()
+            pub_config = RtcConnectionPublishConfig()  # type: ignore
             self.connection = self.agora_service.create_rtc_connection(
                 con_config, pub_config
             )
             logger.info("RTC connection created successfully")
 
-            # 3. Register Audio Observer
+            # 3. Register Observer
             self.audio_observer = PcmAudioObserver(save_to_file=False)
 
-            # Mask 15 = Listen to ALL audio events (Playback, Record, Mixed, BeforeMixing)
+            # Mask 15 = Listen to everything
             ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, 15, 0)
 
             if ret_observer < 0:
                 logger.error(f"Failed to register audio observer, code={ret_observer}")
                 return False
 
-            # 4. Set Audio Parameters
+            # 4. Set Audio Parameters & EXTERNAL SINK
             try:
                 local_user = self.connection.get_local_user()
 
-                # Standard parameters (Mixer might be disabled in headless, but good to have)
+                # --- התיקון הגרעיני: External Sink ---
+                # זה אומר לאגורה: "אל תחפש כרטיס קול, תזרים את המידע אליי!"
+                # הערה: הפרמטרים הם (enabled, sample_rate, channels)
+                local_user.set_external_audio_sink(True, 16000, 1)
+                logger.info("✅ External Audio Sink ENABLED!")
+
+                # הגדרות נוספות ליתר ביטחון
                 local_user.set_playback_audio_frame_parameters(16000, 1, 0, 320)
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 320)
-
-                # --- CRITICAL: Set parameters for 'Before Mixing' callback ---
-                # This is often the only callback that works in headless mode
                 local_user.set_playback_audio_frame_before_mixing_parameters(16000, 1)
 
-                # Subscribe to everything
                 local_user.subscribe_all_audio()
-                logger.info("✅ Audio parameters set successfully")
+
             except Exception as e:
                 logger.warning(f"⚠️ Failed to set audio parameters: {e}")
 
-            # 5. Connect to Channel
+            # 5. Connect
             logger.info(f"Connecting to Agora: channel={channel_name}, uid={uid}")
             ret = self.connection.connect(token, channel_name, uid)
 

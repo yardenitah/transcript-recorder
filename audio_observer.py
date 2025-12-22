@@ -88,6 +88,7 @@ class SonioxMixedWorker:
                         try:
                             # Try to get real audio
                             chunk = self.audio_queue.get(timeout=0.1)
+                            logger.info(f'auodio chunk: {chunk}')
                             websocket.send(chunk)
                         except queue.Empty:
                             # Send silence to keep connection alive if queue is empty
