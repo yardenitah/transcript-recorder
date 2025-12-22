@@ -88,7 +88,7 @@ class SonioxMixedWorker:
                         try:
                             # Try to get real audio
                             chunk = self.audio_queue.get(timeout=0.1)
-                            logger.info(f'auodio chunk: {chunk}')
+                            logger.info(f'🤖 audio chunk: {chunk}')
                             websocket.send(chunk)
                         except queue.Empty:
                             # Send silence to keep connection alive if queue is empty
@@ -112,6 +112,7 @@ class PcmAudioObserver(IAudioFrameObserver):
         try:
             self.frame_count += 1
             data = bytes(frame.buffer)
+            logger.info(f'data from _process_frame function {data}')
 
             # --- RMS Calculation to detect Sound vs Silence ---
             rms = 0
