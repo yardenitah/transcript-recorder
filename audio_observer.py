@@ -63,7 +63,6 @@ class SonioxMixedWorker:
                             try:
                                 for message in websocket:
                                     response = json.loads(message)
-                                    # Log complete tokens
                                     tokens = response.get("tokens", [])
                                     final_text = ""
                                     current_speaker = "?"
@@ -88,7 +87,8 @@ class SonioxMixedWorker:
                         try:
                             # Try to get real audio
                             chunk = self.audio_queue.get(timeout=0.1)
-                            logger.info(f'🤖 audio chunk: {chunk}')
+                            # השורה הזו תראה לנו שהמידע יוצא לסוניוקס
+                            logger.info(f'🤖 Sending audio chunk to Soniox (len={len(chunk)})')
                             websocket.send(chunk)
                         except queue.Empty:
                             # Send silence to keep connection alive if queue is empty
@@ -112,7 +112,10 @@ class PcmAudioObserver(IAudioFrameObserver):
         try:
             self.frame_count += 1
             data = bytes(frame.buffer)
-            logger.info(f'data from _process_frame function {data}')
+
+            # הדפסה שתראה שהפונקציה הפנימית עובדת
+            if self.frame_count % 50 == 0:  # שלא יציף מדי, כל 50 פריימים
+                logger.info(f'🔄 _process_frame processing: {name}, bytes: {len(data)}')
 
             # --- RMS Calculation to detect Sound vs Silence ---
             rms = 0
@@ -127,11 +130,11 @@ class PcmAudioObserver(IAudioFrameObserver):
             if rms > 100:
                 print(f"🔊 [{name}] Sound detected! RMS: {int(rms)}", end="\r")
                 self.worker.add_audio(data, name)
-            elif self.frame_count % 200 == 0:
-                # Heartbeat log for silence
-                print(f"Stats: [{name}] Silence... (RMS: {int(rms)})", end="\r")
 
-            # If we are in 'before_mixing', always send data to avoid dropping frames
+            # אם אתה רוצה לכפות שליחה גם בשקט (לצורך בדיקה), תבטל את ההערה:
+            # self.worker.add_audio(data, name)
+
+            # If we are in 'before_mixing', always send data
             if "before_mixing" in name:
                 self.worker.add_audio(data, name)
 
@@ -140,19 +143,23 @@ class PcmAudioObserver(IAudioFrameObserver):
             logger.error(f"Error reading frame in {name}: {e}")
             return 1
 
-    def on_playback_audio_frame(self, frame: AudioFrame) -> int:
+    def on_playback_audio_frame(self, agora_local_user, channelId, frame):
+        logger.info(f"🔵 Callback: on_playback_audio_frame | Ch: {channelId}")
         return self._process_frame("on_playback", frame)
 
-    def on_record_audio_frame(self, frame: AudioFrame) -> int:
+    def on_record_audio_frame(self, agora_local_user, channelId, frame):
+        # logger.info(f"🔴 Callback: on_record_audio_frame")
         return 1
 
-    def on_mixed_audio_frame(self, frame: AudioFrame) -> int:
+    def on_mixed_audio_frame(self, agora_local_user, channelId, frame):
+        logger.info(f"🟣 Callback: on_mixed_audio_frame | Ch: {channelId}")
         return self._process_frame("on_mixed", frame)
 
     def on_playback_audio_frame_before_mixing(self, agora_local_user, channel_id, uid, frame):
+        logger.info(f"🟠 Callback: before_mixing | UID: {uid}")
         return self._process_frame(f"before_mixing_u{uid}", frame)
 
-    def on_ear_monitoring_audio_frame(self, frame: AudioFrame) -> int:
+    def on_ear_monitoring_audio_frame(self, agora_local_user, frame):
         return 1
 
     def stop(self):
