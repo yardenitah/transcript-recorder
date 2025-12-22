@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-# --- NEW: Monitor User Joins ---
 class MyConnectionObserver(IRtcConnectionObserver):
     def on_user_joined(self, connection, uid, elapsed):
         logger.info(f"👤 [Connection] Remote User JOINED! UID={uid}")
