@@ -6,7 +6,7 @@ from agora.rtc.agora_service import AgoraService, AgoraServiceConfig
 from agora.rtc.rtc_connection import RTCConnConfig
 from audio_observer import PcmAudioObserver
 
-# MAX DEBUG
+# DEBUG level
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -22,10 +22,7 @@ class AgoraManager:
 
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
-
-        # MUST BE 0 to avoid crash on Linux
-        config.enable_audio_device = 0
-
+        config.enable_audio_device = 0  # Headless
         config.enable_video = 0
         config.context = 0
 
@@ -40,7 +37,7 @@ class AgoraManager:
 
         self.agora_service = AgoraService()
         self.agora_service.initialize(config)
-        logger.info("✅ [Manager] Service Initialized (Headless Mode)")
+        logger.info("✅ [Manager] Service Initialized")
 
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
         logger.info(f"🔹 [Manager] Connection Request: {channel_name} / {uid}")
@@ -68,10 +65,10 @@ class AgoraManager:
             logger.debug("🔹 [Manager] Creating Audio Observer...")
             self.audio_observer = PcmAudioObserver(save_to_file=False)
 
-            # --- TARGET: MASK 8 (BEFORE_MIXING) ---
-            # This is the ONLY way to get audio on headless linux without crashing
+            # Mask 8 = BEFORE_MIXING (Raw remote streams)
+            # This is the correct mask for catching audio from remote users
             mask = 8
-            logger.debug(f"🔹 [Manager] Registering Observer with MASK={mask} (BeforeMixing)")
+            logger.debug(f"🔹 [Manager] Registering Observer with MASK={mask}")
             ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
 
             if ret_observer < 0:
@@ -85,16 +82,18 @@ class AgoraManager:
                 local_user = self.connection.get_local_user()
                 logger.debug("🔹 [Manager] Configuring User Params...")
 
-                # ENABLE BEFORE MIXING PARAMS (Critical for Mask 8)
-                logger.debug("🔹 [Manager] Setting BeforeMixing Params (16k, 1ch)")
-                local_user.set_playback_audio_frame_before_mixing_parameters(16000, 1)
+                # --- CRITICAL FIX HERE: (Channels, SampleRate) ---
+                # Fixed order: 1 channel, 16000 Hz
+                logger.debug("🔹 [Manager] Setting BeforeMixing Params (1, 16000)")
+                local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
 
-                # Set others just in case
-                local_user.set_playback_audio_frame_parameters(16000, 1, 1, 160)
+                # Set legacy params just in case (also fixed order if relevant, but mixed usually takes 16000, 1)
+                # Note: Mixed usually expects (SampleRate, Channels, SamplesPerCall) -> 16000, 1, 160
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
+                local_user.set_playback_audio_frame_parameters(16000, 1, 1, 160)
 
                 local_user.subscribe_all_audio()
-                logger.info("✅ [Manager] Audio Params Set (Targeting BeforeMixing)")
+                logger.info("✅ [Manager] Audio Params Set Correctly")
 
             except Exception as e:
                 logger.warning(f"⚠️ [Manager] Params Warning: {e}")
