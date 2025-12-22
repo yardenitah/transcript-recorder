@@ -6,7 +6,7 @@ from agora.rtc.agora_service import AgoraService, AgoraServiceConfig
 from agora.rtc.rtc_connection import RTCConnConfig
 from audio_observer import PcmAudioObserver
 
-# DEBUG level for maximum visibility
+# MAX DEBUG
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -23,7 +23,7 @@ class AgoraManager:
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
 
-        # --- FIX: Set to 0 to prevent Linux Crash ---
+        # MUST BE 0 to avoid crash on Linux
         config.enable_audio_device = 0
 
         config.enable_video = 0
@@ -43,7 +43,7 @@ class AgoraManager:
         logger.info("✅ [Manager] Service Initialized (Headless Mode)")
 
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
-        logger.info(f"🔹 [Manager] Starting Connection: {channel_name} / {uid}")
+        logger.info(f"🔹 [Manager] Connection Request: {channel_name} / {uid}")
 
         if not self.agora_service:
             logger.error("❌ [Manager] Service not initialized!")
@@ -52,10 +52,8 @@ class AgoraManager:
         try:
             # 1. Config
             con_config = RTCConnConfig()
-            # CRITICAL: We must auto-subscribe to receive audio
             con_config.auto_subscribe_audio = 1
             con_config.auto_subscribe_video = 0
-            # Broadcaster receives data reliably even if mute
             con_config.client_role_type = 1
             con_config.channel_profile = 1
 
@@ -67,33 +65,42 @@ class AgoraManager:
             logger.debug("✅ [Manager] Connection Created")
 
             # 3. Register Audio Observer
+            logger.debug("🔹 [Manager] Creating Audio Observer...")
             self.audio_observer = PcmAudioObserver(save_to_file=False)
 
-            # Mask 4 (Mixed Audio) is the standard for server-side listening
-            ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, 4, 0)
+            # --- TARGET: MASK 8 (BEFORE_MIXING) ---
+            # This is the ONLY way to get audio on headless linux without crashing
+            mask = 8
+            logger.debug(f"🔹 [Manager] Registering Observer with MASK={mask} (BeforeMixing)")
+            ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
 
             if ret_observer < 0:
-                logger.error(f"❌ [Manager] Register observer failed: {ret_observer}")
+                logger.error(f"❌ [Manager] Register failed: {ret_observer}")
                 return False
             else:
-                logger.info("✅ [Manager] Observer Registered (Mask 4 - Mixed)")
+                logger.info(f"✅ [Manager] Observer Registered (Mask {mask})")
 
             # 4. Set Audio Parameters
             try:
                 local_user = self.connection.get_local_user()
+                logger.debug("🔹 [Manager] Configuring User Params...")
 
-                # We specifically want the MIXED stream (what everyone else hears)
+                # ENABLE BEFORE MIXING PARAMS (Critical for Mask 8)
+                logger.debug("🔹 [Manager] Setting BeforeMixing Params (16k, 1ch)")
+                local_user.set_playback_audio_frame_before_mixing_parameters(16000, 1)
+
+                # Set others just in case
+                local_user.set_playback_audio_frame_parameters(16000, 1, 1, 160)
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
 
-                # Double check subscription
                 local_user.subscribe_all_audio()
-                logger.info("✅ [Manager] Audio Params Set (Mixed 16k)")
+                logger.info("✅ [Manager] Audio Params Set (Targeting BeforeMixing)")
 
             except Exception as e:
-                logger.warning(f"⚠️ [Manager] Audio Params Warning: {e}")
+                logger.warning(f"⚠️ [Manager] Params Warning: {e}")
 
             # 5. Connect
-            logger.info(f"🔄 [Manager] Connecting to channel...")
+            logger.info(f"🔄 [Manager] Connecting to channel '{channel_name}'...")
             ret = self.connection.connect(token, channel_name, uid)
 
             if ret < 0:
@@ -104,7 +111,7 @@ class AgoraManager:
             return True
 
         except Exception as e:
-            logger.error(f"❌ [Manager] Critical Error: {e}")
+            logger.error(f"❌ [Manager] Error: {e}")
             import traceback
             traceback.print_exc()
             return False
