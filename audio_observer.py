@@ -159,3 +159,5 @@ class PcmAudioObserver(IAudioFrameObserver):
 
     def stop(self):
         self.worker.stop()
+
+        #AA
