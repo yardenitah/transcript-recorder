@@ -14,17 +14,21 @@ logger.setLevel(logging.DEBUG)
 
 class AgoraManager:
     def __init__(self) -> None:
-        logger.debug("🔹 [Manager] __init__ called")
         self.agora_service: Optional[AgoraService] = None
         self.connection = None
         self.audio_observer: Optional[PcmAudioObserver] = None
 
     def initialize(self, app_id: str) -> None:
-        logger.debug(f"🔹 [Manager] initialize() called with APP_ID={app_id}")
+        logger.debug(f"🔹 [Manager] Initializing Engine with APP_ID={app_id}...")
 
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
-        config.enable_audio_device = 0  # Headless for server
+
+        # --- CRITICAL FIX: TRICK THE SERVER ---
+        # We enable the audio device even on a headless server.
+        # This forces the SDK to initialize the audio pipeline.
+        config.enable_audio_device = 1
+
         config.enable_video = 0
         config.context = 0
 
@@ -39,18 +43,17 @@ class AgoraManager:
 
         self.agora_service = AgoraService()
         self.agora_service.initialize(config)
-        logger.info("✅ [Manager] Agora Service initialized successfully")
+        logger.info("✅ [Manager] Service Initialized (Audio Device ENABLED)")
 
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
-        logger.debug(f"🔹 [Manager] start_connection() called. Channel={channel_name}, UID={uid}")
+        logger.info(f"🔹 [Manager] Starting Connection: {channel_name} / {uid}")
 
         if not self.agora_service:
-            logger.error("❌ [Manager] Agora Service is None!")
+            logger.error("❌ [Manager] Service not initialized!")
             return False
 
         try:
-            # 1. Configuration
-            logger.debug("🔹 [Manager] Configuring RTC Connection...")
+            # 1. Config
             con_config = RTCConnConfig()
             con_config.auto_subscribe_audio = 1
             con_config.auto_subscribe_video = 0
@@ -62,70 +65,63 @@ class AgoraManager:
             self.connection = self.agora_service.create_rtc_connection(
                 con_config, pub_config
             )
-            logger.debug("✅ [Manager] Connection object created")
+            logger.debug("✅ [Manager] Connection Created")
 
             # 3. Register Audio Observer
-            logger.debug("🔹 [Manager] Creating PcmAudioObserver...")
+            logger.debug("🔹 [Manager] Registering Audio Observer...")
             self.audio_observer = PcmAudioObserver(save_to_file=False)
 
-            # Mask 8 = BEFORE_MIXING (Raw remote streams)
-            logger.debug("🔹 [Manager] Registering observer with mask 8 (BEFORE_MIXING)")
-            ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, 8, 0)
+            # Mask 4 = MIXED AUDIO. This is the standard pipeline output.
+            ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, 4, 0)
 
             if ret_observer < 0:
-                logger.error(f"❌ [Manager] Failed to register observer! Code={ret_observer}")
+                logger.error(f"❌ [Manager] Register failed: {ret_observer}")
                 return False
             else:
-                logger.info("✅ [Manager] Observer registered successfully (Mask: 8)")
+                logger.info("✅ [Manager] Observer Registered (Mask 4 - MIXED)")
 
             # 4. Set Audio Parameters
             try:
-                logger.debug("🔹 [Manager] Setting Audio Parameters...")
+                logger.debug("🔹 [Manager] Setting Audio Params...")
                 local_user = self.connection.get_local_user()
 
-                # Enable BeforeMixing parameters
-                logger.debug("🔹 [Manager] Calling set_playback_audio_frame_before_mixing_parameters(16000, 1)")
-                local_user.set_playback_audio_frame_before_mixing_parameters(16000, 1)
-
-                # Set others just in case
-                local_user.set_playback_audio_frame_parameters(16000, 1, 1, 160)
+                # Set Mixed Audio parameters (16k, Mono, 10ms)
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
 
-                logger.debug("🔹 [Manager] Subscribing to all audio...")
+                # Also subscribe explicitly
                 local_user.subscribe_all_audio()
-
-                logger.info("✅ [Manager] All Audio parameters set.")
+                logger.info("✅ [Manager] Audio Params Set (Mixed Only)")
 
             except Exception as e:
-                logger.warning(f"⚠️ [Manager] Exception setting params: {e}")
+                logger.warning(f"⚠️ [Manager] Audio Params Warning: {e}")
 
             # 5. Connect
-            logger.info(f"🔄 [Manager] Connecting to channel '{channel_name}'...")
+            logger.info(f"🔄 [Manager] Connecting to channel...")
             ret = self.connection.connect(token, channel_name, uid)
 
             if ret < 0:
-                logger.error(f"❌ [Manager] Connect failed! Code={ret}")
+                logger.error(f"❌ [Manager] Connect failed: {ret}")
                 return False
 
-            logger.info("🚀 [Manager] Connection initiated. Waiting for data...")
+            logger.info("🚀 [Manager] Connection Initiated!")
             return True
 
         except Exception as e:
-            logger.error(f"❌ [Manager] Critical Exception: {e}")
+            logger.error(f"❌ [Manager] Critical Error: {e}")
             import traceback
             traceback.print_exc()
             return False
 
     def stop_connection(self) -> None:
+        logger.info("🔹 [Manager] Stopping...")
         if self.connection:
             if self.audio_observer:
                 try:
-                    logger.debug("🔹 [Manager] Unregistering observer...")
                     self.connection.unregister_audio_frame_observer(self.audio_observer)
-                except Exception as e:
-                    logger.error(f"❌ [Manager] Error unregistering: {e}")
-
+                except Exception:
+                    pass
                 self.audio_observer.stop()
 
             self.connection.disconnect()
             self.connection = None
+            logger.info("🛑 [Manager] Disconnected")
