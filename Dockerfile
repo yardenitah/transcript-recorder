@@ -36,12 +36,17 @@ FROM python:3.10-slim
 # Install system dependencies
 RUN apt-get update --allow-releaseinfo-change && apt-get install -y --no-install-recommends \
     libasound2 \
+    libasound2-plugins \
     libssl-dev \
     ca-certificates \
     libc++-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# --- FIX: CONFIGURE DUMMY AUDIO DEVICE (ALSA) ---
+# This prevents the Agora Engine from crashing when enable_audio_device=1 is set
+RUN echo 'pcm.!default { type plug; slave.pcm "null"; }' > /etc/asound.conf
 
 # Install Python dependencies
 COPY requirements.txt .
@@ -56,8 +61,7 @@ RUN echo "$AGORA_SDK_PATH" > /etc/ld.so.conf.d/agora.conf && ldconfig
 ENV LD_LIBRARY_PATH=$AGORA_SDK_PATH
 ENV PYTHONPATH=/app
 
-# --- SHINUI: PATCH THE SDK BUG ---
-# התיקון הזה מונע את השגיאה TypeError: '>=' not supported between instances of 'NoneType' and 'int'
+# --- SDK BUG FIX (TYPE ERROR) ---
 RUN sed -i 's/if custome_specified >= 0:/if custome_specified is not None and custome_specified >= 0:/g' /usr/local/lib/python3.10/site-packages/agora/rtc/rtc_connection.py
 
 # Copy application code
