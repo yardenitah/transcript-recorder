@@ -94,8 +94,8 @@ class AgoraManager:
             con_config.auto_subscribe_audio = 1
             con_config.client_role_type = 1  # Broadcaster
 
-            # --- SHINUI 1: Change to Communication Profile (0) ---
-            # This matches the default behavior of most Web Demos
+            # --- SHINUI: Communication Profile (0) ---
+            # Necessary for smooth work with the Web Demo
             con_config.channel_profile = 0
 
             # 2. Create Connection
@@ -112,7 +112,8 @@ class AgoraManager:
 
             # 4. Audio Observer Setup
             self.audio_observer = PcmAudioObserver(save_to_file=False)
-            mask = 12  # 4 (Mixed) + 8 (BeforeMixing)
+            # Mask 12 captures both Mixed (4) and BeforeMixing (8)
+            mask = 12
             self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
 
             # 5. Audio Parameters Setup
@@ -120,8 +121,7 @@ class AgoraManager:
             local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
             local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
 
-            # --- SHINUI 2: Force Unmute & Subscribe ---
-            local_user.mute_all_remote_audio_streams(False)  # Force unmute
+            # --- SUBSCRIBE ONLY (No Mute command needed) ---
             ret_sub = local_user.subscribe_all_audio()
 
             if ret_sub < 0:
