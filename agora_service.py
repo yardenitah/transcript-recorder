@@ -22,7 +22,7 @@ class AgoraManager:
 
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
-        config.enable_audio_device = 0  # Headless - Must be 0 to prevent crash
+        config.enable_audio_device = 0  # Headless
         config.enable_video = 0
         config.context = 0
 
@@ -37,10 +37,10 @@ class AgoraManager:
 
         self.agora_service = AgoraService()
         self.agora_service.initialize(config)
-        logger.info("✅ [Manager] Service Initialized")
+        logger.info("✅ [Manager] Service Initialized (Headless)")
 
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
-        logger.info(f"🔹 [Manager] Connecting: {channel_name} / {uid}")
+        logger.info(f"🔹 [Manager] Connecting: Channel='{channel_name}' / UID='{uid}'")
 
         if not self.agora_service:
             logger.error("❌ [Manager] Service not initialized!")
@@ -56,55 +56,57 @@ class AgoraManager:
 
             # 2. Create Connection
             pub_config = RtcConnectionPublishConfig()
+            logger.debug("🔹 [Manager] Creating RTC Connection object...")
             self.connection = self.agora_service.create_rtc_connection(
                 con_config, pub_config
             )
-            logger.debug("✅ [Manager] Connection Created")
+            logger.debug("✅ [Manager] Connection Object Created")
 
             # 3. Audio Observer Setup
+            logger.debug("🔹 [Manager] Initializing Audio Observer...")
             self.audio_observer = PcmAudioObserver(save_to_file=False)
 
-            # MASK 12 = Mixed(4) + BeforeMixing(8)
-            # This listens to BOTH streams to ensure we catch audio
+            # MASK 12
             mask = 12
-            logger.debug(f"🔹 [Manager] Registering Observer MASK={mask}")
+            logger.debug(f"🔹 [Manager] Registering Observer with MASK={mask} (Mixed | BeforeMixing)")
             ret_observer = self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
 
             if ret_observer < 0:
-                logger.error(f"❌ [Manager] Register failed: {ret_observer}")
+                logger.error(f"❌ [Manager] Register failed with code: {ret_observer}")
                 return False
             else:
-                logger.info(f"✅ [Manager] Observer Registered (Mask {mask})")
+                logger.info(f"✅ [Manager] Observer Registered Successfully (Mask {mask})")
 
             # 4. Audio Params
             try:
                 local_user = self.connection.get_local_user()
 
-                # --- CRITICAL FIX: Order is (Channels, SampleRate) ---
-                # Setting this for BeforeMixing (Mask 8)
+                logger.debug("🔹 [Manager] Setting BeforeMixing Params (1ch, 16000Hz)...")
                 local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
 
-                # Setting this for Mixed (Mask 4)
-                # Order: (SampleRate, Channels, SamplesPerCall)
+                logger.debug("🔹 [Manager] Setting Mixed Params (16000Hz, 1ch)...")
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
 
+                logger.debug("🔹 [Manager] Subscribing to all audio...")
                 local_user.subscribe_all_audio()
-                logger.info("✅ [Manager] Params Set (1ch 16k)")
+                logger.info("✅ [Manager] All Audio Params Set")
 
             except Exception as e:
-                logger.warning(f"⚠️ [Manager] Params Warning: {e}")
+                logger.warning(f"⚠️ [Manager] Params Setting Warning: {e}")
 
             # 5. Connect
+            logger.info(f"🔄 [Manager] Connecting to Agora network...")
             ret = self.connection.connect(token, channel_name, uid)
+
             if ret < 0:
-                logger.error(f"❌ Connect failed: {ret}")
+                logger.error(f"❌ [Manager] Connect failed with code: {ret}")
                 return False
 
-            logger.info("🚀 [Manager] Connection Initiated!")
+            logger.info("🚀 [Manager] Connection Initiated! Waiting for callbacks...")
             return True
 
         except Exception as e:
-            logger.error(f"❌ [Manager] Error: {e}")
+            logger.error(f"❌ [Manager] Critical Exception: {e}")
             import traceback
             traceback.print_exc()
             return False
