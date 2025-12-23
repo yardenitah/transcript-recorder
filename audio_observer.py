@@ -33,6 +33,7 @@ class SonioxMixedWorker:
             try:
                 self.audio_queue.get_nowait()
             except queue.Empty:
+                logger.debug(f"🫙 Queue is empty. Retrying")
                 pass
         self.audio_queue.put(data)
 

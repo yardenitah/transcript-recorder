@@ -40,7 +40,7 @@ class AgoraManager:
         logger.info("✅ [Manager] Service Initialized (Headless)")
 
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
-        logger.info(f"🔹 [Manager] Connecting: Channel='{channel_name}' / UID='{uid}'")
+        logger.info(f"🔹 [Manager] Connecting: Channel='{channel_name}' / UID='{uid}'/ Token='{token}'")
 
         if not self.agora_service:
             logger.error("❌ [Manager] Service not initialized!")
@@ -57,9 +57,8 @@ class AgoraManager:
             # 2. Create Connection
             pub_config = RtcConnectionPublishConfig()
             logger.debug("🔹 [Manager] Creating RTC Connection object...")
-            self.connection = self.agora_service.create_rtc_connection(
-                con_config, pub_config
-            )
+            self.connection = self.agora_service.create_rtc_connection(con_config)
+
             logger.debug("✅ [Manager] Connection Object Created")
 
             # 3. Audio Observer Setup
