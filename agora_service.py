@@ -92,15 +92,18 @@ class AgoraManager:
             # 1. Connection configuration
             con_config = RTCConnConfig()
             con_config.auto_subscribe_audio = 1
-            con_config.client_role_type = 1
-            con_config.channel_profile = 1
+            con_config.client_role_type = 1  # Broadcaster
+
+            # --- SHINUI 1: Change to Communication Profile (0) ---
+            # This matches the default behavior of most Web Demos
+            con_config.channel_profile = 0
 
             # 2. Create Connection
             pub_config = RtcConnectionPublishConfig()
             self.connection = self.agora_service.create_rtc_connection(con_config, pub_config)
             logger.debug("✅ [Manager] Connection Object Created")
 
-            # 3. Register Connection Observer (Cursor's diagnostic tool)
+            # 3. Register Connection Observer
             self.connection_observer = ConnLogger()
             try:
                 self.connection.register_observer(self.connection_observer)
@@ -117,8 +120,10 @@ class AgoraManager:
             local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
             local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
 
-            # Explicitly subscribe to all remote audio
+            # --- SHINUI 2: Force Unmute & Subscribe ---
+            local_user.mute_all_remote_audio_streams(False)  # Force unmute
             ret_sub = local_user.subscribe_all_audio()
+
             if ret_sub < 0:
                 logger.error(f"❌ [Manager] subscribe_all_audio failed: {ret_sub}")
 
