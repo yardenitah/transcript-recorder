@@ -37,7 +37,9 @@ class AgoraManager:
 
         self.agora_service = AgoraService()
         self.agora_service.initialize(config)
-        logger.info("✅ [Manager] Service Initialized (Headless)")
+        logger.info(
+            "✅ [Manager] Service Initialized (Headless) | audio_device=0, audio_processor=1"
+        )
 
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
         logger.info(f"🔹 [Manager] Connecting: Channel='{channel_name}' / UID='{uid}'/ Token='{token}'")
@@ -87,8 +89,11 @@ class AgoraManager:
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
 
                 logger.debug("🔹 [Manager] Subscribing to all audio...")
-                local_user.subscribe_all_audio()
-                logger.info("✅ [Manager] All Audio Params Set")
+                ret_sub = local_user.subscribe_all_audio()
+                if ret_sub < 0:
+                    logger.error(f"❌ [Manager] subscribe_all_audio failed with code: {ret_sub}")
+                    return False
+                logger.info("✅ [Manager] All Audio Params Set & Subscribed")
 
             except Exception as e:
                 logger.warning(f"⚠️ [Manager] Params Setting Warning: {e}")
@@ -100,6 +105,8 @@ class AgoraManager:
             if ret < 0:
                 logger.error(f"❌ [Manager] Connect failed with code: {ret}")
                 return False
+            else:
+                logger.info(f"✅ [Manager] Connect returned {ret} (0 means success)")
 
             logger.info("🚀 [Manager] Connection Initiated! Waiting for callbacks...")
             return True

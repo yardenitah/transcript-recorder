@@ -151,7 +151,7 @@ class PcmAudioObserver(IAudioFrameObserver):
 
     def on_record_audio_frame(self, agora_local_user, channelId, frame):
         logger.debug("🔴 Callback: on_record_audio_frame called")
-        return 1
+        return self._process_frame("on_record", frame)
 
     def on_mixed_audio_frame(self, agora_local_user, channelId, frame):
         # If this logs, Mixed audio is working
