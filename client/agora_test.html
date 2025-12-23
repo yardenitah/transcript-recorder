@@ -20,7 +20,6 @@
             overflow: hidden;
         }
 
-        /* כפתורים */
         .btn {
             padding: 12px 24px;
             font-size: 18px;
@@ -61,13 +60,11 @@
     </div>
 
     <script>
-        // --- הגדרות ---
         const APP_ID = "5deec9e3974849299a1e0a770fcca06d";
         const CHANNEL = "test123";
         const TOKEN = "007eJxTYPg4TadlbW791i1fshtFeDcGv5NWvqnetLj06tPqr9LerGkKDKYpqanJlqnGluYmFiaWRpaWiYapBonm5gZpycmJBmYpNpVemQ2BjAw/VtxgZWSAQBCfnaEktbjE0MiYgQEA8BwhKw==";
-        const UID = 123; // מזהה המשתמש שלך (שונה מהבוט שהוא 555)
+        const UID = 123;
 
-        // יצירת הקליינט
         const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
         let localAudioTrack;
@@ -82,17 +79,14 @@
                 await client.join(APP_ID, CHANNEL, TOKEN, UID);
 
                 // 2. Create Tracks (Audio + Video)
-                // שימוש במיקרופון ומצלמה
                 [localAudioTrack, localVideoTrack] = await AgoraRTC.createMicrophoneAndCameraTracks();
 
-                // 3. Play Video Locally (כדי שתראה את עצמך)
-                // אגורה מייצרת אלמנט VIDEO בתוך הדיב שלנו
+                // 3. Play Video Locally
                 localVideoTrack.play("video-container");
 
                 // 4. Publish to Channel
                 await client.publish([localAudioTrack, localVideoTrack]);
 
-                // עדכון ממשק משתמש
                 document.getElementById("status").innerText = "✅ LIVE: Broadcasting Audio & Video";
                 document.getElementById("joinBtn").style.display = "none";
                 document.getElementById("leaveBtn").style.display = "inline-block";
@@ -107,7 +101,6 @@
         }
 
         async function leaveCall() {
-            // ניתוק טראקים
             if(localAudioTrack) {
                 localAudioTrack.stop();
                 localAudioTrack.close();
@@ -116,11 +109,8 @@
                 localVideoTrack.stop();
                 localVideoTrack.close();
             }
+           await client.leave();
 
-            // יציאה מהחדר
-            await client.leave();
-
-            // איפוס ממשק
             document.getElementById("status").innerText = "Status: Disconnected";
             document.getElementById("joinBtn").style.display = "inline-block";
             document.getElementById("leaveBtn").style.display = "none";
@@ -129,7 +119,6 @@
             document.getElementById("muteBtn").classList.remove("muted");
             isMuted = false;
 
-            // ניקוי הקונטיינר של הוידאו
             document.getElementById("video-container").innerHTML = "";
 
             console.log("Left channel successfully.");
