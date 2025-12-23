@@ -121,6 +121,20 @@ class PcmAudioObserver(IAudioFrameObserver):
         self.worker = SonioxMixedWorker()
         self.frame_count = 0
         logger.info("✅ [Observer] Initialized and Ready")
+        # Monitor if we ever get frames; helps detect missing subscription/remote audio
+        self.last_frame_ts = time.time()
+        self._monitor_thread = threading.Thread(target=self._monitor_frames, daemon=True)
+        self._monitor_thread.start()
+
+    def _monitor_frames(self):
+        while True:
+            time.sleep(5)
+            elapsed = time.time() - self.last_frame_ts
+            if elapsed > 5:
+                logger.warning(
+                    f"⏳ [Observer] No audio frames received for {int(elapsed)}s "
+                    f"(check remote publishing + subscriptions)"
+                )
 
     def _process_frame(self, name, frame):
         try:
@@ -138,6 +152,7 @@ class PcmAudioObserver(IAudioFrameObserver):
                 logger.debug(f"👂 [Observer] Source: {name} | {frame_type} | (Alive check)")
 
             self.worker.add_audio(data, name)
+            self.last_frame_ts = time.time()
             return 1
         except Exception as e:
             logger.error(f"❌ [Observer] Processing Error: {e}")
