@@ -57,7 +57,7 @@ class AgoraManager:
             # 2. Create Connection
             pub_config = RtcConnectionPublishConfig()
             logger.debug("🔹 [Manager] Creating RTC Connection object...")
-            self.connection = self.agora_service.create_rtc_connection(con_config)
+            self.connection = self.agora_service.create_rtc_connection(con_config, pub_config)
 
             logger.debug("✅ [Manager] Connection Object Created")
 
@@ -111,6 +111,7 @@ class AgoraManager:
             return False
 
     def stop_connection(self) -> None:
+        logger.info("🟠 [Manager] Start stop connection...")
         if self.connection:
             if self.audio_observer:
                 try:
