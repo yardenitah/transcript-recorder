@@ -162,7 +162,8 @@ import logging
 import os
 from agora.rtc.agora_service import AgoraService, AgoraServiceConfig, RTCConnConfig, RtcConnectionPublishConfig
 from agora.rtc.rtc_connection import IRTCConnectionObserver
-from agora.rtc.audio_frame_observer import IAudioFrameObserver, AudioSubscriptionOptions
+# --- FIX: Removed the non-existent AudioSubscriptionOptions ---
+from agora.rtc.audio_frame_observer import IAudioFrameObserver
 from audio_observer import PcmAudioObserver
 
 # Logging
@@ -194,11 +195,8 @@ class AgoraManager:
         config = AgoraServiceConfig()
         config.app_id = app_id
 
-        # --- SHINUI 1: Force Audio Device ---
-        # גם אם אין רמקולים, אנחנו אומרים למנוע "יש לך התקן",
-        # כדי שהוא יפעיל את לולאת העיבוד (Audio Pump).
+        # Force Audio Device (Critical for Headless Linux)
         config.enable_audio_device = 1
-
         config.enable_audio_processor = 1
         config.enable_video = 0
 
@@ -216,8 +214,7 @@ class AgoraManager:
             con_config.client_role_type = 1  # Broadcaster
             con_config.channel_profile = 1  # Live Broadcasting
 
-            # --- SHINUI 2: Fix for TypeError ---
-            # הגדרת סנריו מפורשת מונעת מה-SDK לנסות לנחש וליפול על NoneType
+            # Explicitly set scenario to avoid NoneType bug in SDK
             con_config.audio_scenario = 0  # AUDIO_SCENARIO_DEFAULT
 
             # 2. Create Connection
@@ -230,25 +227,21 @@ class AgoraManager:
             # 4. Audio Observer
             self.audio_observer = PcmAudioObserver()
 
-            # --- SHINUI 3: Mask Strategy ---
-            # אנחנו מבקשים את כל סוגי הפריימים האפשריים (Mixed + Playback + BeforeMixing)
-            # Mask 12 = (4: Mixed) + (8: BeforeMixing)
-            # אבל בוא ננסה לתפוס הכל ע"י חיבור ביטים
-            # POSITION_PLAYBACK(1) | POSITION_RECORD(2) | POSITION_MIXED(4) | POSITION_BEFORE_MIXING(8) = 15
+            # Register for ALL audio frames (Mask 15 = Mixed + Playback + BeforeMixing + Record)
             mask = 15
             self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
 
-            # 5. Parameters
+            # 5. Parameters (Safe set)
             local_user = self.connection.get_local_user()
-
-            # ניסיון להגדיר פרמטרים, אבל בתוך TRY כדי שלא יפיל את הכל אם זה נכשל
             try:
+                # Set format for BeforeMixing (what we care about)
                 local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
+                # Set format for Mixed (backup)
                 local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
             except Exception as e:
                 logger.warning(f"⚠️ [Manager] Could not set audio params: {e}")
 
-            # 6. Subscribe
+            # 6. Subscribe (No arguments needed for this version)
             local_user.subscribe_all_audio()
 
             # 7. Connect
