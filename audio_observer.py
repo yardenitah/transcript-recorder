@@ -19,9 +19,14 @@ class SonioxMixedWorker:
     def __init__(self):
         self.audio_queue: "queue.Queue[bytes]" = queue.Queue()
         self.running = True
+        self.has_frames = False  # becomes True after first real frame; avoids sending when alone
         logger.debug("🔹 [Worker] Init")
         self.thread = threading.Thread(target=self._run_websocket_loop, daemon=True)
         self.thread.start()
+
+    def mark_active(self):
+        """Called when we process the first audio frame."""
+        self.has_frames = True
 
     def add_audio(self, data: bytes, source: str):
         # Monitor Queue Size
@@ -103,7 +108,11 @@ class SonioxMixedWorker:
                             logger.debug(f"⚡ [Worker] Sending {len(chunk)} bytes | Header: {first_bytes}")
                             websocket.send(chunk)
                         except queue.Empty:
-                            # Log silence (throttled)
+                            # If we never received frames, stay quiet (do not broadcast)
+                            if not self.has_frames:
+                                time.sleep(0.05)
+                                continue
+                            # Otherwise send silence to keep stream alive
                             logger.debug("💤 [Worker] Sending Silence (Queue Empty)")
                             websocket.send(silence)
                         except Exception as e:
@@ -125,6 +134,15 @@ class PcmAudioObserver(IAudioFrameObserver):
         self.last_frame_ts = time.time()
         self._monitor_thread = threading.Thread(target=self._monitor_frames, daemon=True)
         self._monitor_thread.start()
+
+    def get_status(self):
+        """Expose health info for debugging."""
+        now = time.time()
+        return {
+            "frame_count": self.frame_count,
+            "last_frame_ts": self.last_frame_ts,
+            "seconds_since_last_frame": now - self.last_frame_ts,
+        }
 
     def _monitor_frames(self):
         while True:
@@ -152,6 +170,8 @@ class PcmAudioObserver(IAudioFrameObserver):
                 logger.debug(f"👂 [Observer] Source: {name} | {frame_type} | (Alive check)")
 
             self.worker.add_audio(data, name)
+            # Mark that we have actual frames; enables silence padding when needed
+            self.worker.mark_active()
             self.last_frame_ts = time.time()
             return 1
         except Exception as e:

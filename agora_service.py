@@ -4,6 +4,7 @@ from typing import Optional
 from agora.rtc.agora_base import RtcConnectionPublishConfig, AudioSubscriptionOptions
 from agora.rtc.agora_service import AgoraService, AgoraServiceConfig
 from agora.rtc.rtc_connection import RTCConnConfig
+from agora.rtc.rtc_connection_observer import IRtcConnectionObserver
 from audio_observer import PcmAudioObserver
 
 # DEBUG level
@@ -11,11 +12,65 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+class ConnLogger(IRtcConnectionObserver):
+    """Logs high-level connection/user events for debugging presence."""
+
+    def __init__(self):
+        super().__init__()
+        self.users = set()
+        self.published = set()
+        self.state = None
+        self.state_reason = None
+
+    # Remote user joins/leaves
+    def on_user_joined(self, connection, uid):
+        logger.info(f"👤 [Conn] User joined: uid={uid}")
+        self.users.add(uid)
+
+    def on_user_left(self, connection, uid, reason):
+        logger.info(f"👤 [Conn] User left: uid={uid}, reason={reason}")
+        self.users.discard(uid)
+        self.published.discard(uid)
+
+    # Remote user publishes/unpublishes
+    def on_user_publish(self, connection, uid, media_type):
+        logger.info(f"📡 [Conn] User published: uid={uid}, media={media_type}")
+        self.published.add(uid)
+
+    def on_user_unpublish(self, connection, uid, media_type):
+        logger.info(f"📡 [Conn] User UNpublished: uid={uid}, media={media_type}")
+        self.published.discard(uid)
+
+    # Active speaker
+    def on_audio_volume_indication(self, connection, speakers, speaker_number, total_volume):
+        if speaker_number > 0:
+            detail = ", ".join([f"{s.uid}:{s.volume}" for s in speakers[:3]])
+            logger.debug(f"🔈 [Conn] Volume: {detail} (total={total_volume})")
+
+    # Connection state
+    def on_connection_state_changed(self, connection, state, reason):
+        logger.info(f"🔌 [Conn] State changed: state={state}, reason={reason}")
+        self.state = state
+        self.state_reason = reason
+
+    def on_token_privilege_will_expire(self, connection, token):
+        logger.warning("⏳ [Conn] Token will expire soon.")
+
+    def get_status(self):
+        return {
+            "state": self.state,
+            "state_reason": self.state_reason,
+            "users": list(self.users),
+            "published": list(self.published),
+        }
+
+
 class AgoraManager:
     def __init__(self) -> None:
         self.agora_service: Optional[AgoraService] = None
         self.connection = None
         self.audio_observer: Optional[PcmAudioObserver] = None
+        self.connection_observer: Optional["ConnLogger"] = None
 
     def initialize(self, app_id: str) -> None:
         logger.debug(f"🔹 [Manager] Init Engine APP_ID={app_id}")
@@ -62,6 +117,10 @@ class AgoraManager:
             self.connection = self.agora_service.create_rtc_connection(con_config, pub_config)
 
             logger.debug("✅ [Manager] Connection Object Created")
+
+            # Connection observer to see joins/publishes/offline
+            self.connection_observer = ConnLogger()
+            self.connection.register_observer(self.connection_observer)
 
             # 3. Audio Observer Setup
             logger.debug("🔹 [Manager] Initializing Audio Observer...")
@@ -130,3 +189,13 @@ class AgoraManager:
             self.connection.disconnect()
             self.connection = None
             logger.info("🛑 [Manager] Disconnected")
+
+    def get_status(self):
+        status = {
+            "connected": self.connection is not None,
+        }
+        if self.connection_observer:
+            status["connection"] = self.connection_observer.get_status()
+        if self.audio_observer:
+            status["audio"] = self.audio_observer.get_status()
+        return status

@@ -96,3 +96,11 @@ def stop_bot():
     """
     agora_manager.stop_connection()
     return {"status": "disconnected"}
+
+
+@app.get("/status")
+def status():
+    """
+    Return connection + audio observer health info.
+    """
+    return agora_manager.get_status()
