@@ -94,9 +94,8 @@ class AgoraManager:
             con_config.auto_subscribe_audio = 1
             con_config.client_role_type = 1  # Broadcaster
 
-            # --- SHINUI: Communication Profile (0) ---
-            # Necessary for smooth work with the Web Demo
-            con_config.channel_profile = 0
+            # Use Live Broadcasting profile (1)
+            con_config.channel_profile = 1
 
             # 2. Create Connection
             pub_config = RtcConnectionPublishConfig()
@@ -112,22 +111,25 @@ class AgoraManager:
 
             # 4. Audio Observer Setup
             self.audio_observer = PcmAudioObserver(save_to_file=False)
-            # Mask 12 captures both Mixed (4) and BeforeMixing (8)
-            mask = 12
+            mask = 12  # Mixed (4) + BeforeMixing (8)
             self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
 
             # 5. Audio Parameters Setup
             local_user = self.connection.get_local_user()
+
+            # Set PCM parameters for 16kHz mono (Required for Soniox)
+            # Agora AI confirmed this IS the correct way to set format for callbacks
             local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
             local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
 
-            # --- SUBSCRIBE ONLY (No Mute command needed) ---
+            # 6. Audio Subscription (Corrected based on Agora AI)
+            # subscribe_all_audio does NOT take arguments in v2.4.1
             ret_sub = local_user.subscribe_all_audio()
 
             if ret_sub < 0:
                 logger.error(f"❌ [Manager] subscribe_all_audio failed: {ret_sub}")
 
-            # 6. Final Connect call
+            # 7. Final Connect call
             ret = self.connection.connect(token, channel_name, uid)
             if ret < 0:
                 logger.error(f"❌ [Manager] Connect failed with code: {ret}")
