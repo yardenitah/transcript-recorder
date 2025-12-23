@@ -209,170 +209,118 @@
 #     def stop(self):
 #         self.worker.stop()
 
+
 import logging
-import queue
-import threading
-import json
 import os
-import time
-import sys
-from websockets.sync.client import connect
-from agora.rtc.audio_frame_observer import IAudioFrameObserver
+from agora.rtc.agora_service import AgoraService, AgoraServiceConfig, RTCConnConfig, RtcConnectionPublishConfig
+from agora.rtc.rtc_connection import IRTCConnectionObserver
+from agora.rtc.audio_frame_observer import IAudioFrameObserver, AudioSubscriptionOptions
+from audio_observer import PcmAudioObserver
 
-# LOGGING SETUP
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
-logger = logging.getLogger("AUDIO_DEBUG")
+# Logging
+logger = logging.getLogger("agora_service")
+logging.basicConfig(level=logging.DEBUG)
 
 
-class SonioxMixedWorker:
+class ConnLogger(IRTCConnectionObserver):
+    def on_connected(self, agora_rtc_conn, conn_info, reason):
+        logger.info(f"✅ [Conn] Connected! ID={conn_info.id} User={conn_info.user_id}")
+
+    def on_user_joined(self, agora_rtc_conn, uid):
+        logger.info(f"👤 [Conn] User joined: uid={uid}")
+
+    def on_user_left(self, agora_rtc_conn, uid, reason):
+        logger.info(f"👋 [Conn] User left: uid={uid}")
+
+    def on_connecting(self, agora_rtc_conn, conn_info, reason):
+        logger.debug(f"⏳ [Conn] Connecting...")
+
+
+class AgoraManager:
     def __init__(self):
-        self.audio_queue = queue.Queue()
-        self.running = True
-        self.has_frames = False
-        self.thread = threading.Thread(target=self._run_websocket_loop, daemon=True)
-        self.thread.start()
+        self.agora_service = None
+        self.connection = None
+        self.audio_observer = None
 
-    def mark_active(self):
-        self.has_frames = True
+    def initialize(self, app_id: str):
+        config = AgoraServiceConfig()
+        config.app_id = app_id
 
-    def add_audio(self, data: bytes, source: str):
-        if self.audio_queue.qsize() > 2000:
+        # --- SHINUI 1: Force Audio Device ---
+        # גם אם אין רמקולים, אנחנו אומרים למנוע "יש לך התקן",
+        # כדי שהוא יפעיל את לולאת העיבוד (Audio Pump).
+        config.enable_audio_device = 1
+
+        config.enable_audio_processor = 1
+        config.enable_video = 0
+
+        self.agora_service = AgoraService()
+        self.agora_service.initialize(config)
+        logger.info("✅ [Manager] Service Initialized (Force Audio Device Mode)")
+
+    def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
+        logger.info(f"🔹 [Manager] Connecting: Channel='{channel_name}' / UID='{uid}'")
+
+        try:
+            # 1. Connection Config
+            con_config = RTCConnConfig()
+            con_config.auto_subscribe_audio = 1
+            con_config.client_role_type = 1  # Broadcaster
+            con_config.channel_profile = 1  # Live Broadcasting
+
+            # --- SHINUI 2: Fix for TypeError ---
+            # הגדרת סנריו מפורשת מונעת מה-SDK לנסות לנחש וליפול על NoneType
+            con_config.audio_scenario = 0  # AUDIO_SCENARIO_DEFAULT
+
+            # 2. Create Connection
+            self.connection = self.agora_service.create_rtc_connection(con_config)
+
+            # 3. Register Observer
+            self.connection_observer = ConnLogger()
+            self.connection.register_observer(self.connection_observer)
+
+            # 4. Audio Observer
+            self.audio_observer = PcmAudioObserver()
+
+            # --- SHINUI 3: Mask Strategy ---
+            # אנחנו מבקשים את כל סוגי הפריימים האפשריים (Mixed + Playback + BeforeMixing)
+            # Mask 12 = (4: Mixed) + (8: BeforeMixing)
+            # אבל בוא ננסה לתפוס הכל ע"י חיבור ביטים
+            # POSITION_PLAYBACK(1) | POSITION_RECORD(2) | POSITION_MIXED(4) | POSITION_BEFORE_MIXING(8) = 15
+            mask = 15
+            self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
+
+            # 5. Parameters
+            local_user = self.connection.get_local_user()
+
+            # ניסיון להגדיר פרמטרים, אבל בתוך TRY כדי שלא יפיל את הכל אם זה נכשל
             try:
-                self.audio_queue.get_nowait()
-            except queue.Empty:
-                pass
-        self.audio_queue.put(data)
-
-    def stop(self):
-        self.running = False
-        self.thread.join(timeout=1)
-
-    def _run_websocket_loop(self):
-        api_key = os.environ.get("SONIOX_API_KEY")
-        if not api_key:
-            logger.error("❌ [Worker] No API Key")
-            return
-
-        uri = "wss://stt-rt.soniox.com/transcribe-websocket"
-        config = {
-            "api_key": api_key, "model": "stt-rt-preview", "audio_format": "pcm_s16le",
-            "sample_rate": 16000, "num_channels": 1, "enable_speaker_diarization": True,
-            "enable_language_identification": True, "language_hints": ["he"]
-        }
-
-        while self.running:
-            try:
-                logger.info(f"🔄 [Worker] Connecting to Soniox...")
-                with connect(uri, ping_interval=None) as websocket:
-                    logger.info("✅ [Worker] Connected to Soniox!")
-                    websocket.send(json.dumps(config))
-
-                    def read_task():
-                        while True:
-                            try:
-                                for message in websocket:
-                                    res = json.loads(message)
-                                    if res.get("tokens"):
-                                        text = "".join([t["text"] for t in res["tokens"] if t.get("is_final")])
-                                        if text: print(f"\n🎤 [Soniox]: {text}")
-                            except:
-                                break
-
-                    threading.Thread(target=read_task, daemon=True).start()
-
-                    silence = b'\x00' * 640
-                    while self.running:
-                        try:
-                            chunk = self.audio_queue.get(timeout=0.02)
-                            websocket.send(chunk)
-                        except queue.Empty:
-                            if self.has_frames: websocket.send(silence)
+                local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
+                local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
             except Exception as e:
-                logger.error(f"⚠️ [Worker] Error: {e}")
-                time.sleep(3)
+                logger.warning(f"⚠️ [Manager] Could not set audio params: {e}")
 
+            # 6. Subscribe
+            local_user.subscribe_all_audio()
 
-class PcmAudioObserver(IAudioFrameObserver):
-    def __init__(self, save_to_file: bool = False):
-        super(PcmAudioObserver, self).__init__()
-        self.worker = SonioxMixedWorker()
-        self.frame_count = 0
-        logger.info("✅ [Observer] Ready (*args Mode)")
+            # 7. Connect
+            ret = self.connection.connect(token, channel_name, uid)
+            if ret < 0:
+                logger.error(f"❌ Connect failed: {ret}")
+                return False
 
-        self.last_frame_ts = time.time()
-        threading.Thread(target=self._monitor_frames, daemon=True).start()
+            logger.info(f"🚀 [Manager] Connection Initiated")
+            return True
 
-    def _monitor_frames(self):
-        while True:
-            time.sleep(5)
-            elapsed = time.time() - self.last_frame_ts
-            if elapsed > 5:
-                logger.warning(f"⏳ [Observer] No audio frames for {int(elapsed)}s")
-
-    def _process_frame(self, name, frame):
-        try:
-            self.frame_count += 1
-            data = bytes(frame.buffer)
-            is_silence = all(b == 0 for b in data)
-
-            if not is_silence:
-                logger.info(f"👂 [Observer] GOT AUDIO! Source: {name} | Size: {len(data)}")
-                self.worker.mark_active()
-
-            self.worker.add_audio(data, name)
-            self.last_frame_ts = time.time()
-            return 1
         except Exception as e:
-            logger.error(f"❌ Processing Error: {e}")
-            return 1
-
-    # --- THE MAGIC FIX: *args ---
-    # אלו הפונקציות החדשות. הן מקבלות "הכל" ומחלצות את הפריים ידנית.
-
-    def on_playback_audio_frame_before_mixing(self, *args):
-        # args יכיל את כל הפרמטרים שהמנוע שולח, לא משנה כמה יש
-        try:
-            # ננסה לנחש איפה ה-UID ואיפה הפריים
-            # בדרך כלל: (user, channel, uid, frame, vad1, vad2)
-            uid = args[2]
-            frame = args[3]  # הפריים הוא בדרך כלל הרביעי
-
-            # בדיקה מהירה: אם frame הוא לא אובייקט, ננסה אינדקס אחר
-            if not hasattr(frame, 'buffer'):
-                # חיפוש חכם של הפריים בתוך הארגומנטים
-                for arg in args:
-                    if hasattr(arg, 'buffer'):
-                        frame = arg
-                        break
-
-            logger.debug(f"🔥 [CALLBACK] BeforeMixing Triggered! UID={uid}")
-            return self._process_frame(f"u{uid}", frame)
-        except Exception as e:
-            logger.error(f"❌ [BeforeMixing] Error parsing args: {e} | Args: {args}")
-            return 1
-
-    def on_mixed_audio_frame(self, *args):
-        try:
-            logger.debug("🟣Callback: on_mixed_audio_frame")
-            frame = args[-1]
-            if not hasattr(frame, 'buffer'):
-                for arg in args:
-                    if hasattr(arg, 'buffer'):
-                        frame = arg
-                        break
-            return self._process_frame("mixed", frame)
-        except:
-            return 1
-
-    def on_playback_audio_frame(self, *args):
-        return 1
-
-    def on_record_audio_frame(self, *args):
-        return 1
-
-    def on_ear_monitoring_audio_frame(self, *args):
-        return 1
+            logger.error(f"❌ [Manager] Error: {e}")
+            return False
 
     def stop(self):
-        self.worker.stop()
-
+        if self.connection:
+            self.connection.disconnect()
+            self.connection.unregister_audio_frame_observer()
+            self.connection = None
+        if self.agora_service:
+            self.agora_service.release()
+            self.agora_service = None
