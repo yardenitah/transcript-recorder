@@ -85,7 +85,8 @@ class AgoraManager:
 
             try:
                 # after this line the SDH should start calling the callback in service.py
-                ret_obs = self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
+                # ret_obs = self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
+                ret_obs = self.connection.register_audio_frame_observer(self.audio_observer, 0, None)
                 logger.info(f"[DEBUG] register_audio_frame_observer ret={ret_obs}")
             except Exception as e:
                 logger.error(f"[DEBUG] register_audio_frame_observer FAILED: {e}")
