@@ -50,7 +50,7 @@ class AgoraManager:
 
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
         logger.info(f"🔹 [Manager] Connecting: Channel='{channel_name}' / UID='{uid}'")
-        logger.info(f"start_connection [DEBUG]: uid - excepted type={type(uid)}   uid - excepted type={type(uid)}")
+        logger.info("[DEBUG] IRtcConnectionObserver callbacks: %s",[m for m in dir(IRtcConnectionObserver) if m.startswith("on_")])
 
         if not self.agora_service:
             logger.error("❌ [Manager] Service not initialized!")
@@ -80,20 +80,30 @@ class AgoraManager:
 
             # 4. Audio Observer Setup
             self.audio_observer = PcmAudioObserver(save_to_file=False)
-            mask = 12  # Mixed (4) + BeforeMixing (8)
-            self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
+            # mask = 12  # Mixed (4) + BeforeMixing (8)
+            mask = 15  # 1+2+4+8 => playback + record + mixed + before_mixing | its temp for debug
+
+            try:
+                # after this line the SDH should start calling the callback in service.py
+                ret_obs = self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
+                logger.info(f"[DEBUG] register_audio_frame_observer ret={ret_obs}")
+            except Exception as e:
+                logger.error(f"[DEBUG] register_audio_frame_observer FAILED: {e}")
+                return False
 
             # 5. Audio Parameters Setup
             local_user = self.connection.get_local_user()
 
             # Set PCM parameters for 16kHz mono (Required for Soniox)
             # Agora AI confirmed this IS the correct way to set format for callbacks
-            local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
-            local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
+            r1 = local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
+            r2 = local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
+            logger.info(f"[DEBUG] set_before_mixing ret={r1}, set_mixed ret={r2}")
 
             # 6. Audio Subscription (Corrected based on Agora AI)
             # subscribe_all_audio does NOT take arguments in v2.4.1
             ret_sub = local_user.subscribe_all_audio()
+            logger.info(f"[DEBUG] subscribe_all_audio ret={ret_sub}")
 
             if ret_sub < 0:
                 logger.error(f"❌ [Manager] subscribe_all_audio failed: {ret_sub}")

@@ -1,10 +1,4 @@
-import logging
-import queue
-import threading
-import json
-import os
-import time
-import sys
+import logging, queue, threading, json, os, time, sys
 
 from websockets.sync.client import connect
 from agora.rtc.audio_frame_observer import IAudioFrameObserver
@@ -52,7 +46,6 @@ class SonioxMixedWorker:
             return
 
         uri = "wss://stt-rt.soniox.com/transcribe-websocket"
-
         config = {
             "api_key": api_key,
             "model": "stt-rt-preview",
@@ -63,7 +56,6 @@ class SonioxMixedWorker:
             "enable_language_identification": True,
             "language_hints": ["he"]
         }
-
         while self.running:
             try:
                 logger.info(f"🔄 [Worker] Connecting to Soniox...")
