@@ -1,5 +1,6 @@
 import logging
 from typing import Optional
+import inspect
 
 # Try to import the correct Observer class name for version 2.4.1 (IRTC...)
 # with a fallback to the older name (IRtc...)
@@ -50,6 +51,7 @@ class AgoraManager:
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
         logger.info(f"🔹 [Manager] Connecting: Channel='{channel_name}' / UID='{uid}'")
         logger.info(f"start_connection [DEBUG]: uid - excepted type={type(uid)}   uid - excepted type={type(uid)}")
+        logger.info(f"connect signature: {inspect.signature(self.connection.connect)}")
 
         if not self.agora_service:
             logger.error("❌ [Manager] Service not initialized!")
