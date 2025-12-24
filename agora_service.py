@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 import inspect
 
+
 # Try to import the correct Observer class name for version 2.4.1 (IRTC...)
 # with a fallback to the older name (IRtc...)
 try:
@@ -82,11 +83,12 @@ class AgoraManager:
             self.audio_observer = PcmAudioObserver(save_to_file=False)
             # mask = 12  # Mixed (4) + BeforeMixing (8)
             mask = 15  # 1+2+4+8 => playback + record + mixed + before_mixing | its temp for debug
+            logger.info(f"register_audio_frame_observer signature: {inspect.signature(self.connection.register_audio_frame_observer)}")
 
             try:
                 # after this line the SDH should start calling the callback in service.py
                 # ret_obs = self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
-                ret_obs = self.connection.register_audio_frame_observer(self.audio_observer, 0, None)
+                ret_obs = self.connection.register_audio_frame_observer(self.audio_observer, mask, 0)
                 logger.info(f"[DEBUG] register_audio_frame_observer ret={ret_obs}")
             except Exception as e:
                 logger.error(f"[DEBUG] register_audio_frame_observer FAILED: {e}")
