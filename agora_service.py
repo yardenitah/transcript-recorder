@@ -561,15 +561,26 @@ class AgoraManager:
             return False
 
     def subscribe_user_audio(self, remote_uid: str) -> None:
-        """Try explicit per-user subscribe (some setups need it)."""
+        """Try explicit per-user subscribe (SDK signature differs by version)."""
         if not self.local_user:
             logger.warning("⚠️ subscribe_user_audio called but local_user is None")
             return
 
         rid = _norm_uid(remote_uid)
+
         try:
-            opts = AudioSubscriptionOptions()
-            ret = self.local_user.subscribe_audio(rid, opts)
+            sig = inspect.signature(self.local_user.subscribe_audio)
+            # after self, how many args?
+            num_params = len(sig.parameters) - 1
+
+            if num_params <= 1:
+                # subscribe_audio(user_id)
+                ret = self.local_user.subscribe_audio(rid)
+            else:
+                # subscribe_audio(user_id, options)
+                opts = AudioSubscriptionOptions()
+                ret = self.local_user.subscribe_audio(rid, opts)
+
             logger.info("🔊 subscribe_audio(%s) ret=%s", rid, ret)
         except Exception as e:
             logger.warning("⚠️ subscribe_audio(%s) failed: %s", rid, e)
