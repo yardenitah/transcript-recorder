@@ -51,7 +51,6 @@ class AgoraManager:
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
         logger.info(f"🔹 [Manager] Connecting: Channel='{channel_name}' / UID='{uid}'")
         logger.info(f"start_connection [DEBUG]: uid - excepted type={type(uid)}   uid - excepted type={type(uid)}")
-        logger.info(f"connect signature: {inspect.signature(self.connection.connect)}")
 
         if not self.agora_service:
             logger.error("❌ [Manager] Service not initialized!")
@@ -70,6 +69,7 @@ class AgoraManager:
             pub_config = RtcConnectionPublishConfig()
             self.connection = self.agora_service.create_rtc_connection(con_config, pub_config)
             logger.debug("✅ [Manager] Connection Object Created")
+            logger.info(f"connect signature: {inspect.signature(self.connection.connect)}")
 
             # 3. Register Connection Observer
             self.connection_observer = ConnLogger()
