@@ -23,6 +23,9 @@ RUN echo "$AGORA_SDK_PATH" > /etc/ld.so.conf.d/agora.conf && ldconfig
 ENV LD_LIBRARY_PATH=$AGORA_SDK_PATH
 ENV PYTHONPATH=/app
 
+# --- FIX SDK BUG (CRITICAL) ---
+RUN sed -i 's/if custome_specified >= 0:/if custome_specified is not None and custome_specified >= 0:/g' /usr/local/lib/python3.10/site-packages/agora/rtc/rtc_connection.py
+
 # Copy application code
 COPY . .
 
@@ -30,5 +33,3 @@ EXPOSE 8000
 
 # Start the application using Uvicorn
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-
