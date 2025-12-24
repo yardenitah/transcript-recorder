@@ -18,41 +18,6 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-class ConnLogger(IRtcConnectionObserver):
-    """
-    Observer class to track real-time connection events and user presence.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.users = set()
-        self.published = set()
-        self.state = None
-
-    def on_user_joined(self, *args):
-        # Handling dynamic arguments as different SDK versions send different params (uid, elapsed)
-        uid = args[1] if len(args) > 1 else args[0]
-        logger.info(f"👤 [Conn] User joined: uid={uid}")
-        self.users.add(uid)
-
-    def on_user_left(self, *args):
-        uid = args[1] if len(args) > 1 else args[0]
-        logger.info(f"👤 [Conn] User left: uid={uid}")
-        self.users.discard(uid)
-        self.published.discard(uid)
-
-    def on_connection_state_changed(self, *args):
-        # Triggered when connection state changes (connecting, connected, failed, etc.)
-        logger.info(f"🔌 [Conn] State changed")
-
-    def get_status(self):
-        """Returns collected connection status for the API."""
-        return {
-            "users": list(self.users),
-            "published": list(self.published),
-        }
-
-
 class AgoraManager:
     def __init__(self) -> None:
         self.agora_service: Optional[AgoraService] = None
@@ -84,6 +49,8 @@ class AgoraManager:
 
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
         logger.info(f"🔹 [Manager] Connecting: Channel='{channel_name}' / UID='{uid}'")
+        logger.info(f"start_connection [DEBUG]: uid - excepted type={type(uid)}   uid - excepted type={type(uid)}")
+
         if not self.agora_service:
             logger.error("❌ [Manager] Service not initialized!")
             return False
@@ -156,3 +123,37 @@ class AgoraManager:
         if self.audio_observer:
             status["audio"] = self.audio_observer.get_status()
         return status
+
+class ConnLogger(IRtcConnectionObserver):
+    """
+    Observer class to track real-time connection events and user presence.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.users = set()
+        self.published = set()
+        self.state = None
+
+    def on_user_joined(self, *args):
+        # Handling dynamic arguments as different SDK versions send different params (uid, elapsed)
+        uid = args[1] if len(args) > 1 else args[0]
+        logger.info(f"👤 [Conn] User joined: uid={uid}")
+        self.users.add(uid)
+
+    def on_user_left(self, *args):
+        uid = args[1] if len(args) > 1 else args[0]
+        logger.info(f"👤 [Conn] User left: uid={uid}")
+        self.users.discard(uid)
+        self.published.discard(uid)
+
+    def on_connection_state_changed(self, *args):
+        # Triggered when connection state changes (connecting, connected, failed, etc.)
+        logger.info(f"🔌 [Conn] State changed")
+
+    def get_status(self):
+        """Returns collected connection status for the API."""
+        return {
+            "users": list(self.users),
+            "published": list(self.published),
+        }
