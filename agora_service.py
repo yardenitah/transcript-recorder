@@ -204,6 +204,8 @@ class AgoraManager:
 
     def initialize(self, app_id: str) -> None:
         logger.debug(f"🔹 [Manager] Init Engine APP_ID={app_id}")
+        logger.info(f"🤟🏻🤟🏻🤟🏻 Tal code")
+
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
         config.enable_audio_device = 0  # Headless mode (no physical sound card)
