@@ -1,8 +1,263 @@
+<!--<!DOCTYPE html>-->
+<!--<html lang="en">-->
+<!--<head>-->
+<!--  <meta charset="UTF-8" />-->
+<!--  <title>Agora Video & Audio Tester</title>-->
+<!--  <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.18.2.js"></script>-->
+<!--  <style>-->
+<!--    body { background:#222; color:#fff; font-family:sans-serif; text-align:center; padding:20px; }-->
+<!--    h1 { margin-bottom:10px; }-->
+<!--    .row { display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin:10px 0; }-->
+<!--    input {-->
+<!--      width: 520px; max-width: 92vw;-->
+<!--      padding:10px; border-radius:8px; border:1px solid #444; background:#111; color:#fff;-->
+<!--      font-size:14px;-->
+<!--    }-->
+<!--    #status { margin: 10px 0; font-weight:bold; }-->
+<!--    #micLevel { margin: 6px 0; font-size: 14px; opacity: 0.9; }-->
+<!--    #video-container {-->
+<!--      width: 640px; height: 480px; background:#000; margin:20px auto;-->
+<!--      border:2px solid #444; border-radius:10px; position:relative; overflow:hidden;-->
+<!--    }-->
+<!--    #remote-container { width: 640px; margin: 0 auto; text-align:left; }-->
+<!--    .remote-box {-->
+<!--      margin: 10px 0; padding: 10px; border: 1px solid #444; border-radius: 10px; background:#111;-->
+<!--    }-->
+<!--    .btn {-->
+<!--      padding:12px 24px; font-size:18px; cursor:pointer; border:none; border-radius:6px;-->
+<!--      margin:10px; color:white; font-weight:bold; transition:.2s;-->
+<!--    }-->
+<!--    #joinBtn { background:#007bff; }-->
+<!--    #joinBtn:hover { background:#0056b3; }-->
+<!--    #leaveBtn { background:#dc3545; display:none; }-->
+<!--    #leaveBtn:hover { background:#a71d2a; }-->
+<!--    #muteBtn { background:#ffc107; color:black; display:none; }-->
+<!--    #muteBtn:hover { background:#d39e00; }-->
+<!--    .muted { background:#555 !important; color:white !important; }-->
+<!--    pre {-->
+<!--      text-align:left; width: 960px; max-width: 95vw; margin: 16px auto;-->
+<!--      background:#111; border:1px solid #333; border-radius:10px; padding:12px; overflow:auto;-->
+<!--      font-size: 12px; line-height: 1.4;-->
+<!--    }-->
+<!--  </style>-->
+<!--</head>-->
+<!--<body>-->
+
+<!--<h1>Agora Client: Video + Audio + Controls 🎥</h1>-->
+<!--<p>Use this to test your Python Bot.</p>-->
+
+<!--<div id="status">Status: Disconnected</div>-->
+<!--<div id="micLevel">MIC: -</div>-->
+
+<!--<div class="row">-->
+<!--  <div>-->
+<!--      <label>App id</label>-->
+<!--      <input id="appIdInput" placeholder="APP_ID" />-->
+<!--  </div>-->
+<!--  <div>-->
+<!--      <label>Channel name</label>-->
+<!--      <input id="channelInput" placeholder="CHANNEL" />-->
+<!--  </div>-->
+<!--  <div>-->
+<!--      <label>Uid</label>-->
+<!--      <input id="uidInput" placeholder="UID (e.g. 123 or leave empty for auto)" />-->
+<!--  </div>-->
+
+<!--    <div>-->
+<!--      <label>Token</label>-->
+<!--      <input id="tokenInput" placeholder="TOKEN" />-->
+<!--  </div>-->
+<!--</div>-->
+
+<!--<div id="video-container"></div>-->
+
+<!--<div>-->
+<!--  <button id="joinBtn" class="btn" onclick="joinCall()">JOIN CHANNEL</button>-->
+<!--  <button id="muteBtn" class="btn" onclick="toggleMute()">MUTE MIC</button>-->
+<!--  <button id="leaveBtn" class="btn" onclick="leaveCall()">LEAVE CALL</button>-->
+<!--</div>-->
+
+<!--<div id="remote-container"></div>-->
+
+<!--<pre id="log"></pre>-->
+
+<!--<script>-->
+<!--  // === DEFAULTS (your new token + test1) ===-->
+<!--  const DEFAULT_APP_ID = "5deec9e3974849299a1e0a770fcca06d";-->
+<!--  const DEFAULT_CHANNEL = "test1";-->
+<!--  const DEFAULT_TOKEN = "007eJxTYNCZe2ZZxIFWmf05729/2CWiZZnbdtQucftKwf0ebQ28PE8VGExTUlOTLVONLc1NLEwsjSwtEw1TDRLNzQ3SkpMTDcxS9j/2zmwIZGTwu+jCysgAgSA+K0NJanGJIQMDAKc1IHs=";-->
+<!--  const DEFAULT_UID = "123";-->
+
+<!--  document.getElementById("appIdInput").value = DEFAULT_APP_ID;-->
+<!--  document.getElementById("channelInput").value = DEFAULT_CHANNEL;-->
+<!--  document.getElementById("tokenInput").value = DEFAULT_TOKEN;-->
+<!--  document.getElementById("uidInput").value = DEFAULT_UID;-->
+
+<!--  const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });-->
+
+<!--  let localAudioTrack;-->
+<!--  let localVideoTrack;-->
+<!--  let isMuted = false;-->
+<!--  let micMeterTimer = null;-->
+
+<!--  function log(...args) {-->
+<!--    console.log(...args);-->
+<!--    const el = document.getElementById("log");-->
+<!--    el.textContent += args.map(a => (typeof a === "string" ? a : JSON.stringify(a))).join(" ") + "\n";-->
+<!--    el.scrollTop = el.scrollHeight;-->
+<!--  }-->
+
+<!--  function setStatus(s) {-->
+<!--    document.getElementById("status").innerText = s;-->
+<!--  }-->
+
+<!--  function setMicLevelText(v) {-->
+<!--    document.getElementById("micLevel").innerText = `MIC volume: ${v}`;-->
+<!--  }-->
+
+<!--  // -&#45;&#45; Remote subscribe (useful for 2-browser test) -&#45;&#45;-->
+<!--  client.on("user-published", async (user, mediaType) => {-->
+<!--    log("[EVT] user-published", { uid: user.uid, mediaType });-->
+<!--    await client.subscribe(user, mediaType);-->
+<!--    log("[EVT] subscribed", { uid: user.uid, mediaType });-->
+
+<!--    if (mediaType === "audio" && user.audioTrack) {-->
+<!--      user.audioTrack.play(); // plays on default output-->
+<!--      log("[REMOTE] audio playing", { uid: user.uid });-->
+<!--    }-->
+
+<!--    if (mediaType === "video" && user.videoTrack) {-->
+<!--      const remoteContainer = document.getElementById("remote-container");-->
+<!--      const boxId = `remote-${user.uid}`;-->
+<!--      let box = document.getElementById(boxId);-->
+<!--      if (!box) {-->
+<!--        box = document.createElement("div");-->
+<!--        box.className = "remote-box";-->
+<!--        box.id = boxId;-->
+<!--        box.innerHTML = `<div>Remote UID: ${user.uid}</div><div id="remote-player-${user.uid}" style="width:100%;height:240px;background:#000;border-radius:10px;margin-top:8px;"></div>`;-->
+<!--        remoteContainer.appendChild(box);-->
+<!--      }-->
+<!--      user.videoTrack.play(`remote-player-${user.uid}`);-->
+<!--      log("[REMOTE] video playing", { uid: user.uid });-->
+<!--    }-->
+<!--  });-->
+
+<!--  client.on("user-unpublished", (user, mediaType) => {-->
+<!--    log("[EVT] user-unpublished", { uid: user.uid, mediaType });-->
+<!--  });-->
+
+<!--  client.on("user-joined", (user) => log("[EVT] user-joined", { uid: user.uid }));-->
+<!--  client.on("user-left", (user) => log("[EVT] user-left", { uid: user.uid }));-->
+
+<!--  async function joinCall() {-->
+<!--    try {-->
+<!--      const APP_ID = document.getElementById("appIdInput").value.trim();-->
+<!--      const CHANNEL = document.getElementById("channelInput").value.trim();-->
+<!--      const TOKEN = document.getElementById("tokenInput").value.trim();-->
+<!--      const uidRaw = document.getElementById("uidInput").value.trim();-->
+<!--      const UID = uidRaw === "" ? null : Number(uidRaw);-->
+
+<!--      setStatus("Connecting...");-->
+<!--      log("[1] Joining Agora...", { CHANNEL, UID });-->
+
+<!--      await client.join(APP_ID, CHANNEL, TOKEN, UID);-->
+<!--      log("[2] Joined OK");-->
+
+<!--      log("[3] Creating mic+cam tracks...");-->
+<!--      [localAudioTrack, localVideoTrack] = await AgoraRTC.createMicrophoneAndCameraTracks(-->
+<!--        {}, // audio config-->
+<!--        { encoderConfig: { width: 640, height: 480, frameRate: 15 } }-->
+<!--      );-->
+<!--      log("[4] Tracks created");-->
+
+<!--      localVideoTrack.play("video-container");-->
+<!--      log("[5] Local video playing");-->
+
+<!--      await client.publish([localAudioTrack, localVideoTrack]);-->
+<!--      log("[6] Published OK ✅ (audio+video)");-->
+
+<!--      setStatus("✅ LIVE: Broadcasting Audio & Video");-->
+<!--      document.getElementById("joinBtn").style.display = "none";-->
+<!--      document.getElementById("leaveBtn").style.display = "inline-block";-->
+<!--      document.getElementById("muteBtn").style.display = "inline-block";-->
+
+<!--      // mic level meter-->
+<!--      if (micMeterTimer) clearInterval(micMeterTimer);-->
+<!--      micMeterTimer = setInterval(async () => {-->
+<!--        if (!localAudioTrack) return;-->
+<!--        const level = await localAudioTrack.getVolumeLevel(); // 0..1-->
+<!--        setMicLevelText(level.toFixed(3));-->
+<!--      }, 500);-->
+
+<!--    } catch (error) {-->
+<!--      console.error("Join failed:", error);-->
+<!--      log("❌ Join failed:", error.message || error);-->
+<!--      setStatus("❌ Error: " + (error.message || error));-->
+<!--    }-->
+<!--  }-->
+
+<!--  async function leaveCall() {-->
+<!--    try {-->
+<!--      if (micMeterTimer) { clearInterval(micMeterTimer); micMeterTimer = null; }-->
+<!--      setMicLevelText("-");-->
+
+<!--      if (localAudioTrack) { localAudioTrack.stop(); localAudioTrack.close(); localAudioTrack = null; }-->
+<!--      if (localVideoTrack) { localVideoTrack.stop(); localVideoTrack.close(); localVideoTrack = null; }-->
+
+<!--      await client.leave();-->
+
+<!--      setStatus("Status: Disconnected");-->
+<!--      document.getElementById("joinBtn").style.display = "inline-block";-->
+<!--      document.getElementById("leaveBtn").style.display = "none";-->
+<!--      document.getElementById("muteBtn").style.display = "none";-->
+<!--      document.getElementById("muteBtn").innerText = "MUTE MIC";-->
+<!--      document.getElementById("muteBtn").classList.remove("muted");-->
+<!--      isMuted = false;-->
+
+<!--      document.getElementById("video-container").innerHTML = "";-->
+<!--      document.getElementById("remote-container").innerHTML = "";-->
+
+<!--      log("Left channel successfully.");-->
+<!--    } catch (e) {-->
+<!--      log("Leave error:", e.message || e);-->
+<!--    }-->
+<!--  }-->
+
+<!--  function toggleMute() {-->
+<!--    if (!localAudioTrack) return;-->
+
+<!--    if (isMuted) {-->
+<!--      localAudioTrack.setMuted(false);-->
+<!--      isMuted = false;-->
+<!--      document.getElementById("muteBtn").innerText = "MUTE MIC";-->
+<!--      document.getElementById("muteBtn").classList.remove("muted");-->
+<!--      log("Mic Unmuted");-->
+<!--    } else {-->
+<!--      localAudioTrack.setMuted(true);-->
+<!--      isMuted = true;-->
+<!--      document.getElementById("muteBtn").innerText = "UNMUTE";-->
+<!--      document.getElementById("muteBtn").classList.add("muted");-->
+<!--      log("Mic Muted");-->
+<!--    }-->
+<!--  }-->
+<!--</script>-->
+<!--</body>-->
+<!--</html>-->
+
+
+
+
+
+
+
+
+
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Agora Video & Audio Tester</title>
+  <title>Agora Video & Audio Tester (RTC)</title>
   <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.18.2.js"></script>
   <style>
     body { background:#222; color:#fff; font-family:sans-serif; text-align:center; padding:20px; }
@@ -43,29 +298,28 @@
 </head>
 <body>
 
-<h1>Agora Client: Video + Audio + Controls 🎥</h1>
-<p>Use this to test your Python Bot.</p>
+<h1>Agora Client: RTC (Audio + Video) 🎥</h1>
+<p>Use this to test the Python bot subscription.</p>
 
 <div id="status">Status: Disconnected</div>
 <div id="micLevel">MIC: -</div>
 
 <div class="row">
   <div>
-      <label>App id</label>
-      <input id="appIdInput" placeholder="APP_ID" />
+    <label>App id</label>
+    <input id="appIdInput" placeholder="APP_ID" />
   </div>
   <div>
-      <label>Channel name</label>
-      <input id="channelInput" placeholder="CHANNEL" />
+    <label>Channel name</label>
+    <input id="channelInput" placeholder="CHANNEL" />
   </div>
   <div>
-      <label>Uid</label>
-      <input id="uidInput" placeholder="UID (e.g. 123 or leave empty for auto)" />
+    <label>Uid</label>
+    <input id="uidInput" placeholder="UID (e.g. 123 or leave empty for auto)" />
   </div>
-
-    <div>
-      <label>Token</label>
-      <input id="tokenInput" placeholder="TOKEN" />
+  <div>
+    <label>Token</label>
+    <input id="tokenInput" placeholder="TOKEN" />
   </div>
 </div>
 
@@ -82,7 +336,7 @@
 <pre id="log"></pre>
 
 <script>
-  // === DEFAULTS (your new token + test1) ===
+  // Defaults
   const DEFAULT_APP_ID = "5deec9e3974849299a1e0a770fcca06d";
   const DEFAULT_CHANNEL = "test1";
   const DEFAULT_TOKEN = "007eJxTYNCZe2ZZxIFWmf05729/2CWiZZnbdtQucftKwf0ebQ28PE8VGExTUlOTLVONLc1NLEwsjSwtEw1TDRLNzQ3SkpMTDcxS9j/2zmwIZGTwu+jCysgAgSA+K0NJanGJIQMDAKc1IHs=";
@@ -93,6 +347,7 @@
   document.getElementById("tokenInput").value = DEFAULT_TOKEN;
   document.getElementById("uidInput").value = DEFAULT_UID;
 
+  // RTC (Communication)
   const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
   let localAudioTrack;
@@ -115,14 +370,14 @@
     document.getElementById("micLevel").innerText = `MIC volume: ${v}`;
   }
 
-  // --- Remote subscribe (useful for 2-browser test) ---
+  // Events
   client.on("user-published", async (user, mediaType) => {
     log("[EVT] user-published", { uid: user.uid, mediaType });
     await client.subscribe(user, mediaType);
     log("[EVT] subscribed", { uid: user.uid, mediaType });
 
     if (mediaType === "audio" && user.audioTrack) {
-      user.audioTrack.play(); // plays on default output
+      user.audioTrack.play();
       log("[REMOTE] audio playing", { uid: user.uid });
     }
 
@@ -134,7 +389,8 @@
         box = document.createElement("div");
         box.className = "remote-box";
         box.id = boxId;
-        box.innerHTML = `<div>Remote UID: ${user.uid}</div><div id="remote-player-${user.uid}" style="width:100%;height:240px;background:#000;border-radius:10px;margin-top:8px;"></div>`;
+        box.innerHTML = `<div>Remote UID: ${user.uid}</div>
+          <div id="remote-player-${user.uid}" style="width:100%;height:240px;background:#000;border-radius:10px;margin-top:8px;"></div>`;
         remoteContainer.appendChild(box);
       }
       user.videoTrack.play(`remote-player-${user.uid}`);
@@ -151,13 +407,15 @@
 
   async function joinCall() {
     try {
+      log("Browser:", navigator.userAgent);
+      setStatus("Connecting...");
+
       const APP_ID = document.getElementById("appIdInput").value.trim();
       const CHANNEL = document.getElementById("channelInput").value.trim();
       const TOKEN = document.getElementById("tokenInput").value.trim();
       const uidRaw = document.getElementById("uidInput").value.trim();
       const UID = uidRaw === "" ? null : Number(uidRaw);
 
-      setStatus("Connecting...");
       log("[1] Joining Agora...", { CHANNEL, UID });
 
       await client.join(APP_ID, CHANNEL, TOKEN, UID);
@@ -165,8 +423,12 @@
 
       log("[3] Creating mic+cam tracks...");
       [localAudioTrack, localVideoTrack] = await AgoraRTC.createMicrophoneAndCameraTracks(
-        {}, // audio config
-        { encoderConfig: { width: 640, height: 480, frameRate: 15 } }
+        {
+          // audio config (you can keep empty)
+        },
+        {
+          encoderConfig: { width: 640, height: 480, frameRate: 15 }
+        }
       );
       log("[4] Tracks created");
 
@@ -176,12 +438,11 @@
       await client.publish([localAudioTrack, localVideoTrack]);
       log("[6] Published OK ✅ (audio+video)");
 
-      setStatus("✅ LIVE: Broadcasting Audio & Video");
+      setStatus("✅ LIVE (RTC): Publishing Audio & Video");
       document.getElementById("joinBtn").style.display = "none";
       document.getElementById("leaveBtn").style.display = "inline-block";
       document.getElementById("muteBtn").style.display = "inline-block";
 
-      // mic level meter
       if (micMeterTimer) clearInterval(micMeterTimer);
       micMeterTimer = setInterval(async () => {
         if (!localAudioTrack) return;
