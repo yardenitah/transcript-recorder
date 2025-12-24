@@ -347,14 +347,12 @@
 #             "published": list(self.published),
 #         }
 
-
 import logging
-import os
-import time
+from typing import Optional
 import inspect
-from typing import Optional, Any
 
-# Try to import correct Observer class name (depends on SDK version)
+# Try to import the correct Observer class name for version 2.4.1 (IRTC...)
+# with a fallback to the older name (IRtc...)
 try:
     from agora.rtc.rtc_connection_observer import IRTCConnectionObserver as IRtcConnectionObserver
 except ImportError:
@@ -363,27 +361,17 @@ except ImportError:
 from agora.rtc.agora_base import RtcConnectionPublishConfig, AudioSubscriptionOptions
 from agora.rtc.agora_service import AgoraService, AgoraServiceConfig
 from agora.rtc.rtc_connection import RTCConnConfig
-
+from agora.rtc.local_user_observer import IRTCLocalUserObserver
 from audio_observer import PcmAudioObserver
 
+# Logger setup
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# Hard "fingerprint" to verify THIS code runs inside Docker
-BUILD_TAG = "🤟🏻🤟🏻🤟🏻 Tal code | build=2025-12-24 | svc=agora_service.py || 🤓 gpt fixed"
-
-
-def _norm_uid(x: Any) -> str:
-    """Best-effort normalize uid from Agora callbacks."""
-    try:
-        if isinstance(x, bytes):
-            return x.decode("utf-8", errors="ignore")
-        if isinstance(x, (int, float)):
-            return str(int(x))
-        # sometimes SDK passes a ctype/struct/string-like
-        return str(x)
-    except Exception:
-        return repr(x)
+# Enable SDK's internal logging for audio frame observer
+sdk_logger = logging.getLogger('agora.rtc._ctypes_handle._audio_frame_observer')
+sdk_logger.setLevel(logging.DEBUG)
+sdk_logger.addHandler(logging.StreamHandler())
 
 
 class AgoraManager:
@@ -392,23 +380,13 @@ class AgoraManager:
         self.connection = None
         self.audio_observer: Optional[PcmAudioObserver] = None
         self.connection_observer: Optional["ConnLogger"] = None
-        self.local_user = None
+        self.local_user_observer: Optional["LocalUserLogger"] = None
 
     def initialize(self, app_id: str) -> None:
-        logger.info(BUILD_TAG)
-        logger.info(
-            "Runtime: pid=%s hostname=%s cwd=%s time=%s",
-            os.getpid(),
-            os.environ.get("HOSTNAME"),
-            os.getcwd(),
-            time.strftime("%Y-%m-%d %H:%M:%S"),
-        )
-
-        logger.debug("🔹 [Manager] Init Engine APP_ID=%s", app_id)
-
+        logger.debug(f"🔹 [Manager] Init Engine APP_ID={app_id}")
         config = AgoraServiceConfig()
         config.enable_audio_processor = 1
-        config.enable_audio_device = 0  # headless mode (no physical sound card)
+        config.enable_audio_device = 0  # Headless mode (no physical sound card)
         config.enable_video = 0
         config.context = 0
 
@@ -426,228 +404,174 @@ class AgoraManager:
         self.agora_service.initialize(config)
         logger.info("✅ [Manager] Service Initialized (Headless Mode)")
 
-    def _register_audio_observer(self, mask_debug: int) -> int:
-        """
-        Register audio frame observer in a way that matches the installed SDK signature.
-        In agora_python_server_sdk 2.4.1 it's usually:
-            register_audio_frame_observer(observer, enable_vad, vad_configure)
-        But we keep a safe fallback if signature differs.
-        """
-        if not self.connection:
-            raise RuntimeError("connection is None")
-
-        sig = inspect.signature(self.connection.register_audio_frame_observer)
-        param_names = [p.name for p in sig.parameters.values()][1:]  # exclude self
-        logger.info("[DEBUG] register_audio_frame_observer signature: %s", sig)
-        logger.info("[DEBUG] register_audio_frame_observer params: %s", param_names)
-
-        # Prefer the 2.4.1-style signature: (observer, enable_vad, vad_configure)
-        joined = " ".join(param_names).lower()
-        if "vad" in joined and "mask" not in joined:
-            # enable_vad = 0, vad_configure = None
-            return self.connection.register_audio_frame_observer(self.audio_observer, 0, None)
-
-        # Fallback (older variants used mask)
-        # Usually something like: (observer, mask, ???)
-        try:
-            return self.connection.register_audio_frame_observer(self.audio_observer, mask_debug, 0)
-        except TypeError:
-            # last resort: try minimal call
-            return self.connection.register_audio_frame_observer(self.audio_observer)
-
     def start_connection(self, channel_name: str, uid: str, token: str) -> bool:
-        logger.info("🔹 [Manager] Connecting: Channel='%s' / UID='%s'", channel_name, uid)
-        logger.info(
-            "[DEBUG] IRtcConnectionObserver callbacks: %s",
-            [m for m in dir(IRtcConnectionObserver) if m.startswith("on_")],
-        )
+        logger.info(f"🔹 [Manager] Connecting: Channel='{channel_name}' / UID='{uid}'")
+        logger.info("[DEBUG] IRtcConnectionObserver callbacks: %s",[m for m in dir(IRtcConnectionObserver) if m.startswith("on_")])
 
         if not self.agora_service:
             logger.error("❌ [Manager] Service not initialized!")
             return False
 
         try:
-            # 1) Connection config
+            # 1. Connection configuration
             con_config = RTCConnConfig()
             con_config.auto_subscribe_audio = 1
+            con_config.client_role_type = 1  # Broadcaster
 
-            # IMPORTANT: match browser mode="rtc" (Communication profile)
-            # 0 = Communication, 1 = Live Broadcasting (in most Agora SDKs)
-            con_config.channel_profile = 0
+            # Use Live Broadcasting profile (1)
+            con_config.channel_profile = 1
 
-            # Server is just listening -> Audience is usually better
-            # (If your SDK expects broadcaster, switch to 1)
-            con_config.client_role_type = 2  # Audience
-
-            # 2) Create connection
+            # 2. Create Connection
             pub_config = RtcConnectionPublishConfig()
             self.connection = self.agora_service.create_rtc_connection(con_config, pub_config)
             logger.debug("✅ [Manager] Connection Object Created")
-            logger.info("connect signature: %s", inspect.signature(self.connection.connect))
-
-            # 3) Register connection observer
-            self.connection_observer = ConnLogger(manager=self)
+            logger.info(f"connect signature: {inspect.signature(self.connection.connect)}")
             try:
-                self.connection.register_observer(self.connection_observer)
-                logger.info("[DEBUG] register_observer OK")
-            except Exception as e:
-                logger.warning("⚠️ [Manager] Could not register connection observer: %s", e)
+                logger.debug("[Manager][SAFETY BELT] step one")
+                # 3. Register Connection Observer
+                self.connection_observer = ConnLogger()
+                logger.debug("[Manager][SAFETY BELT] step two")
+                try:
+                    self.connection.register_observer(self.connection_observer)
+                    logger.debug("[Manager][SAFETY BELT] step three")
+                except Exception as e:
+                    logger.warning(f"⚠️ [Manager] Could not register connection observer: {e}")
 
-            # 4) Audio observer setup
+                # 3b. Register Local User Observer (for audio subscription events)
+                logger.debug("[Manager][SAFETY BELT] step four")
+                self.local_user_observer = LocalUserLogger()
+                logger.debug("[Manager][SAFETY BELT] step five")
+                try:
+                    ret_local_obs = self.connection.register_local_user_observer(self.local_user_observer)
+                    logger.info(f"[DEBUG] register_local_user_observer ret={ret_local_obs}")
+                except Exception as e:
+                    logger.warning(f"⚠️ [Manager] Could not register local user observer: {e}")
+            except Exception as e:
+                logger.error(f"❌ [Manager][SAFETY BELT] Oh my oh my!!! 😱 {e}")
+
+            # 4. Get local user first
+            local_user = self.connection.get_local_user()
+            logger.info(f"[DEBUG] local_user obtained: {local_user}")
+
+            # 5. Set PCM parameters BEFORE registering observer (order matters!)
+            # Set PCM parameters for 16kHz mono (Required for Soniox)
+            r1 = local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
+            r2 = local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
+            logger.info(f"[DEBUG] set_before_mixing ret={r1}, set_mixed ret={r2}")
+
+            if r1 < 0 or r2 < 0:
+                logger.error(f"❌ [Manager] Audio parameters setup failed: r1={r1}, r2={r2}")
+
+            # 6. Audio Observer Setup (AFTER parameters)
             self.audio_observer = PcmAudioObserver(save_to_file=False)
-
-            # only used for fallback (older mask-based APIs)
-            mask_debug = 15  # playback + record + mixed + before_mixing (debug)
+            logger.info(f"[DEBUG] PcmAudioObserver created: {self.audio_observer}")
 
             try:
-                ret_obs = self._register_audio_observer(mask_debug=mask_debug)
-                logger.info("[DEBUG] register_audio_frame_observer ret=%s", ret_obs)
+                # Register observer: params are (observer, enable_vad, vad_configure)
+                # SDK v2.4.0 automatically enables all callbacks - no mask needed
+                ret_obs = self.connection.register_audio_frame_observer(self.audio_observer, 0, None)
+                logger.info(f"[DEBUG] register_audio_frame_observer ret={ret_obs}")
+
+                if ret_obs < 0:
+                    logger.error(f"❌ [Manager] Audio observer registration FAILED with code: {ret_obs}")
+                    return False
+                else:
+                    logger.info(f"✅ [Manager] Audio observer registered successfully")
             except Exception as e:
-                logger.error("[DEBUG] register_audio_frame_observer FAILED: %s", e)
+                logger.error(f"[DEBUG] register_audio_frame_observer FAILED: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return False
 
-            # 5) Set audio frame parameters
-            local_user = self.connection.get_local_user()
-            self.local_user = local_user
+            # 7. Audio Subscription (Corrected based on Agora AI)
+            # subscribe_all_audio does NOT take arguments in v2.4.1
+            ret_sub = local_user.subscribe_all_audio()
+            logger.info(f"[DEBUG] subscribe_all_audio ret={ret_sub}")
 
-            # Helpful: log available methods quickly
-            try:
-                logger.info("[DEBUG] LocalUser has subscribe_audio? %s", hasattr(local_user, "subscribe_audio"))
-                if hasattr(local_user, "subscribe_audio"):
-                    logger.info("[DEBUG] subscribe_audio signature: %s", inspect.signature(local_user.subscribe_audio))
-            except Exception:
-                pass
+            if ret_sub < 0:
+                logger.error(f"❌ [Manager] subscribe_all_audio failed: {ret_sub}")
+            else:
+                logger.info(f"✅ [Manager] subscribe_all_audio succeeded")
 
-            # These parameters affect callbacks formats (best-effort; depends on SDK)
-            try:
-                r_before = local_user.set_playback_audio_frame_before_mixing_parameters(1, 16000)
-            except Exception as e:
-                r_before = f"ERR({e})"
-
-            try:
-                r_mixed = local_user.set_mixed_audio_frame_parameters(16000, 1, 160)
-            except Exception as e:
-                r_mixed = f"ERR({e})"
-
-            try:
-                # not always exists; fine if fails
-                r_record = local_user.set_record_audio_frame_parameters(16000, 1, 160)
-            except Exception as e:
-                r_record = f"ERR({e})"
-
-            logger.info(
-                "[DEBUG] set_before_mixing=%s, set_mixed=%s, set_record=%s",
-                r_before, r_mixed, r_record
-            )
-
-            # 6) Subscribe all audio
-            try:
-                ret_sub = local_user.subscribe_all_audio()
-                logger.info("[DEBUG] subscribe_all_audio ret=%s", ret_sub)
-            except Exception as e:
-                logger.warning("⚠️ subscribe_all_audio failed: %s", e)
-
-            # 7) Connect
+            # 8. Final Connect call
             ret = self.connection.connect(token, channel_name, uid)
             if ret < 0:
-                logger.error("❌ [Manager] Connect failed with code: %s", ret)
+                logger.error(f"❌ [Manager] Connect failed with code: {ret}")
                 return False
 
-            logger.info("🚀 [Manager] Connection Initiated (Code: %s)", ret)
+            logger.info(f"🚀 [Manager] Connection Initiated (Code: {ret})")
+            logger.info(f"⚠️ [Manager] NOTE: Audio callbacks will only fire when REMOTE USERS publish audio!")
             return True
 
         except Exception as e:
-            logger.error("❌ [Manager] Critical Error during connection: %s", e)
+            logger.error(f"❌ [Manager] Critical Error during connection: {e}")
             return False
-
-    def subscribe_user_audio(self, remote_uid: str) -> None:
-        """Try explicit per-user subscribe (SDK signature differs by version)."""
-        if not self.local_user:
-            logger.warning("⚠️ subscribe_user_audio called but local_user is None")
-            return
-
-        rid = _norm_uid(remote_uid)
-
-        try:
-            sig = inspect.signature(self.local_user.subscribe_audio)
-            # after self, how many args?
-            num_params = len(sig.parameters) - 1
-
-            if num_params <= 1:
-                # subscribe_audio(user_id)
-                ret = self.local_user.subscribe_audio(rid)
-            else:
-                # subscribe_audio(user_id, options)
-                opts = AudioSubscriptionOptions()
-                ret = self.local_user.subscribe_audio(rid, opts)
-
-            logger.info("🔊 subscribe_audio(%s) ret=%s", rid, ret)
-        except Exception as e:
-            logger.warning("⚠️ subscribe_audio(%s) failed: %s", rid, e)
 
     def stop_connection(self) -> None:
         if self.connection:
-            try:
-                self.connection.disconnect()
-            except Exception:
-                pass
+            self.connection.disconnect()
             self.connection = None
-            self.local_user = None
             logger.info("🛑 [Manager] Disconnected")
 
     def get_status(self):
-        status = {"connected": self.connection is not None, "build_tag": BUILD_TAG}
+        """Aggregates all status info for the /status endpoint."""
+        status = {"connected": self.connection is not None}
         if self.connection_observer:
             status["connection"] = self.connection_observer.get_status()
         if self.audio_observer:
             status["audio"] = self.audio_observer.get_status()
         return status
 
+class LocalUserLogger(IRTCLocalUserObserver):
+    """
+    Observer for local user events - critical for audio subscription debugging.
+    """
+    def on_user_audio_track_subscribed(self, agora_local_user, user_id, agora_remote_audio_track):
+        logger.info(f"🎵 [LocalUser] Audio track subscribed: user_id={user_id}, track={agora_remote_audio_track}")
+
+    def on_audio_subscribe_state_changed(self, agora_local_user, channel, user_id, old_state, new_state, elapse_since_last_state):
+        logger.info(f"🔄 [LocalUser] Audio subscribe state changed: user_id={user_id}, old={old_state}, new={new_state}")
+
+    def on_first_remote_audio_frame(self, agora_local_user, user_id, elapsed):
+        logger.info(f"🎤 [LocalUser] First remote audio frame: user_id={user_id}, elapsed={elapsed}ms")
+
+    def on_first_remote_audio_decoded(self, agora_local_user, user_id, elapsed):
+        logger.info(f"🔊 [LocalUser] First remote audio decoded: user_id={user_id}, elapsed={elapsed}ms")
+
+    def on_user_audio_track_state_changed(self, agora_local_user, user_id, agora_remote_audio_track, state, reason, elapsed):
+        logger.info(f"📡 [LocalUser] Audio track state changed: user_id={user_id}, state={state}, reason={reason}")
+
 
 class ConnLogger(IRtcConnectionObserver):
-    def __init__(self, manager: AgoraManager):
+    """
+    Observer class to track real-time connection events and user presence.
+    """
+
+    def __init__(self):
         super().__init__()
-        self.manager = manager
         self.users = set()
+        self.published = set()
+        self.state = None
 
     def on_user_joined(self, *args):
-        # Many SDK builds pass (connection, uid) or (uid, elapsed) etc.
-        uid = None
-        if len(args) >= 2:
-            uid = args[1]
-        elif len(args) == 1:
-            uid = args[0]
-
-        uid_str = _norm_uid(uid)
-        logger.info("👤 [Conn] User joined: uid=%s args=%s", uid_str, [repr(a) for a in args])
-        self.users.add(uid_str)
-
-        # Try explicit subscribe (in addition to subscribe_all_audio)
-        self.manager.subscribe_user_audio(uid_str)
+        # Handling dynamic arguments as different SDK versions send different params (uid, elapsed)
+        uid = args[1] if len(args) > 1 else args[0]
+        logger.info(f"👤 [Conn] User joined: uid={uid}")
+        self.users.add(uid)
 
     def on_user_left(self, *args):
-        uid = None
-        if len(args) >= 2:
-            uid = args[1]
-        elif len(args) == 1:
-            uid = args[0]
+        uid = args[1] if len(args) > 1 else args[0]
+        logger.info(f"👤 [Conn] User left: uid={uid}")
+        self.users.discard(uid)
+        self.published.discard(uid)
 
-        uid_str = _norm_uid(uid)
-        logger.info("👤 [Conn] User left: uid=%s args=%s", uid_str, [repr(a) for a in args])
-        self.users.discard(uid_str)
-
-    # Add a few common callbacks (best-effort; signatures vary)
-    def on_connecting(self, *args):
-        logger.info("🔌 [Conn] on_connecting args=%s", [repr(a) for a in args])
-
-    def on_connected(self, *args):
-        logger.info("✅ [Conn] on_connected args=%s", [repr(a) for a in args])
-
-    def on_disconnected(self, *args):
-        logger.info("🧯 [Conn] on_disconnected args=%s", [repr(a) for a in args])
-
-    def on_error(self, *args):
-        logger.error("💥 [Conn] on_error args=%s", [repr(a) for a in args])
+    def on_connection_state_changed(self, *args):
+        # Triggered when connection state changes (connecting, connected, failed, etc.)
+        logger.info(f"🔌 [Conn] State changed")
 
     def get_status(self):
-        return {"users": sorted(list(self.users))}
+        """Returns collected connection status for the API."""
+        return {
+            "users": list(self.users),
+            "published": list(self.published),
+        }
