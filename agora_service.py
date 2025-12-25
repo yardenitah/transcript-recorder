@@ -466,6 +466,7 @@ class AgoraManager:
             self.audio_observer = PcmAudioObserver(save_to_file=False)
             logger.info(f"[DEBUG] PcmAudioObserver created: {self.audio_observer}")
 
+
             try:
                 # Register observer: params are (observer, enable_vad, vad_configure)
                 # SDK v2.4.0 automatically enables all callbacks - no mask needed
