@@ -76,15 +76,28 @@ class SonioxWorker:
                                     logger.debug(f"🤘 [Worker][Messiah] ladys & gents! we have a message!!!")
                                     response = json.loads(message)
                                     tokens = response.get("tokens", [])
-                                    final_text = ""
-                                    for t in tokens:
-                                        if t.get("is_final"):
-                                            final_text += t.get("text", "")
 
-                                    if final_text.strip():
-                                        print(f"\n🎤 [User {self.worker_id}]: {final_text}")
-                            except Exception as e:
-                                logger.error(f"❌ [Reader] Error: {e}")
+                                    if not tokens:
+                                        continue
+
+                                    final_sentence = ""
+                                    partial_sentence = ""
+                                    for t in tokens:
+                                        text = t.get("text", "")
+                                        if t.get("is_final", False):
+                                            final_sentence += text
+                                        else:
+                                            partial_sentence += text
+
+                                    # 1. If we have a final (committed) sentence - print it permanently (new line)
+                                    if final_sentence.strip():
+                                        print(f"\r🎤 [{self.worker_id}]: {final_sentence}")  # Use \r to return to start of line and spaces to overwrite any previous partial text
+                                    # 2. If we have partial text (instant feedback) - print on the same updating line
+                                    elif partial_sentence.strip():
+                                        print(f"\r⏳ [{self.worker_id}]: {partial_sentence}", end="", flush=True) # end="\r" keeps the cursor at the start of the line without creating a new line (animation effect)
+
+                            except Exception as err:
+                                logger.error(f"❌ [Reader] Error: {err}")
                                 break
 
                     reader = threading.Thread(target=read_task, daemon=True)
