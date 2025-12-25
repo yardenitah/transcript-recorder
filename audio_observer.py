@@ -4,9 +4,13 @@ from websockets.sync.client import connect
 from agora.rtc.audio_frame_observer import IAudioFrameObserver
 
 # LOGGING SETUP
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
-logger = logging.getLogger("AUDIO_DEBUG")
+# logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+# logger = logging.getLogger("AUDIO_DEBUG")
 
+logging.basicConfig(stream=sys.stdout, level=logging.INFO) # Change from DEBUG to INFO
+logger = logging.getLogger("AUDIO_DEBUG")
+logger.setLevel(logging.INFO)
+logging.getLogger("websockets").setLevel(logging.WARNING)
 
 class SonioxWorker:
     def __init__(self, worker_id="Mixed"):
@@ -73,14 +77,11 @@ class SonioxWorker:
                                     response = json.loads(message)
                                     tokens = response.get("tokens", [])
                                     final_text = ""
-                                    current_speaker = "?" #TODO: remove current_speaker and spk i just check if current_speaker and work id are the seam
                                     for t in tokens:
                                         if t.get("is_final"):
                                             final_text += t.get("text", "")
-                                            spk = t.get("speaker", "?")
-                                            current_speaker = f"Speaker {spk}"
+
                                     if final_text.strip():
-                                        print(f"\n🎤 [{current_speaker}]: {final_text}")
                                         print(f"\n🎤 [User {self.worker_id}]: {final_text}")
                             except Exception as e:
                                 logger.error(f"❌ [Reader] Error: {e}")
@@ -94,8 +95,8 @@ class SonioxWorker:
                         try:
                             chunk = self.audio_queue.get(timeout=0.02)
                             # Log actual data sent (First 10 bytes)
-                            first_bytes = chunk[:10].hex()
-                            logger.debug(f"⚡ [Worker] Sending {len(chunk)} bytes | Header: {first_bytes}")
+                            # first_bytes = chunk[:10].hex()
+                            # logger.debug(f"⚡ [Worker] Sending {len(chunk)} bytes | Header: {first_bytes}")
                             websocket.send(chunk)
                         except queue.Empty:
                             # If we never received frames, stay quiet (do not broadcast)
