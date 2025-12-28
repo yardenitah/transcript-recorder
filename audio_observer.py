@@ -1,12 +1,10 @@
 import logging, queue, threading, json, os, time, sys
-
 from websockets.sync.client import connect
 from agora.rtc.audio_frame_observer import IAudioFrameObserver
 
 # LOGGING SETUP
 # logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 # logger = logging.getLogger("AUDIO_DEBUG")
-
 logging.basicConfig(stream=sys.stdout, level=logging.INFO) # Change from DEBUG to INFO
 logger = logging.getLogger("AUDIO_DEBUG")
 logger.setLevel(logging.INFO)
@@ -22,86 +20,6 @@ class SonioxWorker:
         self.thread = threading.Thread(target=self._connect_and_stream, daemon=True)
         self.thread.start()
 
-    # def _run_websocket_loop(self):
-    #     api_key = os.environ.get("SONIOX_API_KEY")
-    #     if not api_key:
-    #         logger.error("❌ [Worker] No API Key")
-    #         return
-    #
-    #     uri = "wss://stt-rt.soniox.com/transcribe-websocket"
-    #     config = {
-    #         "api_key": api_key,
-    #         "model": "stt-rt-preview",
-    #         "audio_format": "pcm_s16le",
-    #         "sample_rate": 16000,
-    #         "num_channels": 1,
-    #         "enable_speaker_diarization": False,
-    #         "enable_language_identification": True,
-    #         "language_hints": ["he"]
-    #     }
-    #     while self.running:
-    #         try:
-    #             with connect(uri, ping_interval=None) as websocket:
-    #                 logger.info("✅ [Worker] Connected to Soniox!")
-    #                 websocket.send(json.dumps(config))
-    #
-    #                 def read_task():
-    #                     logger.info("🤘 [Worker][Messiah] We're in read_task now")
-    #                     while True:
-    #                         try:
-    #                             for message in websocket:
-    #                                 response = json.loads(message)
-    #                                 tokens = response.get("tokens", [])
-    #
-    #                                 if not tokens:
-    #                                     continue
-    #
-    #                                 final_sentence = ""
-    #                                 partial_sentence = ""
-    #                                 for t in tokens:
-    #                                     text = t.get("text", "")
-    #                                     if t.get("is_final", False):
-    #                                         final_sentence += text
-    #                                     else:
-    #                                         partial_sentence += text
-    #
-    #                                 # 1. If we have a final (committed) sentence - print it permanently (new line)
-    #                                 if final_sentence.strip():
-    #                                     print(f"\r🎤 [{self.worker_id}]: {final_sentence}")  # Use \r to return to start of line and spaces to overwrite any previous partial text
-    #                                 # 2. If we have partial text (instant feedback) - print on the same updating line
-    #                                 elif partial_sentence.strip():
-    #                                     print(f"\r⏳ [{self.worker_id}]: {partial_sentence}", end="", flush=True) # end="\r" keeps the cursor at the start of the line without creating a new line (animation effect)
-    #
-    #                         except Exception as err:
-    #                             logger.error(f"❌ [Reader] Error: {err}")
-    #                             break
-    #
-    #                 reader = threading.Thread(target=read_task, daemon=True)
-    #                 reader.start()
-    #
-    #                 silence = b'\x00' * 640
-    #                 while self.running:
-    #                     try:
-    #                         chunk = self.audio_queue.get(timeout=0.02)
-    #                         # Log actual data sent (First 10 bytes)
-    #                         # first_bytes = chunk[:10].hex()
-    #                         # logger.debug(f"⚡ [Worker] Sending {len(chunk)} bytes | Header: {first_bytes}")
-    #                         websocket.send(chunk)
-    #                     except queue.Empty:
-    #                         # If we never received frames, stay quiet (do not broadcast)
-    #                         if not self.has_frames:
-    #                             time.sleep(0.05)
-    #                             continue
-    #                         # Otherwise send silence to keep stream alive
-    #                         logger.debug("💤 [Worker] Sending Silence (Queue Empty)")
-    #                         websocket.send(silence)
-    #                     except Exception as e:
-    #                         logger.error(f"❌ [Worker] Loop Error: {e}")
-    #                         break
-    #
-    #         except Exception as e:
-    #             logger.error(f"⚠️ [Worker] Connection Fail: {e}")
-    #             time.sleep(3)
 
     # 1. READ LOOP (Background Thread)
     def _read_loop(self, websocket):
@@ -130,7 +48,7 @@ class SonioxWorker:
                     # Print logic:
                     # Final sentence -> New line
                     if final_sentence.strip():
-                        print(f"\r🎤 [{self.worker_id}]: {final_sentence}                                ")
+                        print(f"\r🎤 [{self.worker_id}]: {final_sentence}  ")
                     # Partial sentence -> Update same line (Streaming effect)
                     elif partial_sentence.strip():
                         print(f"\r⏳ [{self.worker_id}]: {partial_sentence}", end="", flush=True)

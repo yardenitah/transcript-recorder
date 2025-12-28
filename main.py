@@ -1,12 +1,11 @@
-import logging
-import os
-import traceback
+import logging, os, traceback, time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
 from agora_service import AgoraManager
+
+from mangum import Mangum
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,6 +26,7 @@ class ConnectionRequest(BaseModel):
     channel_name: str
     uid: str
     token: str
+    is_handoff: bool = False  # New flag for Task 3
 
 
 # Load Agora App ID from environment
@@ -57,17 +57,27 @@ def start_bot(request: ConnectionRequest):
     Start an RTC connection to a specific Agora channel.
     """
     try:
-        success = agora_manager.start_connection(
-            channel_name=request.channel_name,
-            uid=request.uid,
-            token=request.token,
-        )
+        success = agora_manager.start_connection( channel_name=request.channel_name, uid=request.uid, token=request.token,)
 
         if not success:
             raise HTTPException(
                 status_code=500,
                 detail="Failed to connect to Agora (check logs)",
             )
+
+        if request.is_handoff:
+            logger.info("⏳ [Handshake] Waiting for audio verification...")
+            for i in range(20): # Check for audio frames for up to 20 seconds
+                stats = agora_manager.get_status()
+                audio_stats = stats.get('audio', {})
+                # If we received more than 10 frames, audio is working
+                if audio_stats and audio_stats.get('frame_count', 0) > 10:
+                    logger.info("✅ [Handshake] Audio verified! Sending OK.")
+                    return {"status": "connected", "handoff_verified": True}
+
+                time.sleep(1)
+
+            logger.warning("⚠️ [Handshake] Audio not detected, but proceeding to keep session alive.")
 
         return {
             "status": "connected",
@@ -91,16 +101,15 @@ def start_bot(request: ConnectionRequest):
 
 @app.post("/stop")
 def stop_bot():
-    """
-    Stop the current RTC connection.
-    """
+    """ Stop the current RTC connection. """
     agora_manager.stop_connection()
     return {"status": "disconnected"}
 
 
 @app.get("/status")
 def status():
-    """
-    Return connection + audio observer health info.
-    """
+    """ Return connection + audio observer health info. """
     return agora_manager.get_status()
+
+
+handler = Mangum(app)
