@@ -1,18 +1,23 @@
-import logging, os, traceback, time
+import logging
+import os
+import traceback
+import asyncio
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from agora_service import AgoraManager
-
 from mangum import Mangum
+
+# Import the lifecycle logic from the separate file
+from handoff_manager import lifecycle_manager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# --- CORS Configuration: Allows browser client access ---
+# --- CORS Configuration ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,15 +26,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 class ConnectionRequest(BaseModel):
     channel_name: str
     uid: str
     token: str
-    is_handoff: bool = False  # New flag for Task 3
+    is_handoff: bool = False
 
-
-# Load Agora App ID from environment
+# --- Environment Configuration ---
 APP_ID = os.getenv("AGORA_APP_ID")
 if not APP_ID:
     APP_ID = "5deec9e3974849299a1e0a770fcca06d"
@@ -40,7 +43,8 @@ agora_manager = AgoraManager()
 agora_manager.initialize(APP_ID)
 
 
-# --- Configuration Endpoint for the Browser Client ---
+# --- Endpoints ---
+
 @app.get("/agora-config")
 def get_agora_config():
     return {
@@ -52,51 +56,41 @@ def get_agora_config():
 
 
 @app.post("/start")
-def start_bot(request: ConnectionRequest):
-    """
-    Start an RTC connection to a specific Agora channel.
-    """
+async def start_bot(request: ConnectionRequest, background_tasks: BackgroundTasks):
     try:
-        success = agora_manager.start_connection( channel_name=request.channel_name, uid=request.uid, token=request.token,)
+        # 1. Start the lifecycle timer in the background
+        # We pass 'agora_manager' so the timer can stop it later
+        asyncio.create_task(lifecycle_manager(request.channel_name, request.uid, agora_manager))
 
-        if not success:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to connect to Agora (check logs)",
-            )
-
-        if request.is_handoff:
-            logger.info("⏳ [Handshake] Waiting for audio verification...")
-            for i in range(20): # Check for audio frames for up to 20 seconds
-                stats = agora_manager.get_status()
-                audio_stats = stats.get('audio', {})
-                # If we received more than 10 frames, audio is working
-                if audio_stats and audio_stats.get('frame_count', 0) > 10:
-                    logger.info("✅ [Handshake] Audio verified! Sending OK.")
-                    return {"status": "connected", "handoff_verified": True}
-
-                time.sleep(1)
-
-            logger.warning("⚠️ [Handshake] Audio not detected, but proceeding to keep session alive.")
-
-        return {
-            "status": "connected",
-            "channel": request.channel_name,
-            "uid": request.uid,
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        stack = traceback.format_exc()
-        logger.error("CRITICAL ERROR in /start:\n%s", stack)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": str(e),
-                "trace": stack,
-            },
+        # 2. Connect to Agora
+        success = agora_manager.start_connection(
+            channel_name=request.channel_name,
+            uid=request.uid,
+            token=request.token,
         )
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to connect to Agora")
+
+        # 3. If we are the "Relief" bot (Handoff) - verify audio reception before sending OK
+        if request.is_handoff:
+            logger.info("⏳ [Handoff] Verifying audio stream...")
+            for _ in range(15):  # Try for 15 seconds
+                stats = agora_manager.get_status()
+                # If audio frames are received -> Success
+                if stats.get('audio', {}).get('frame_count', 0) > 5:
+                    logger.info("✅ [Handoff] Audio verified! Sending OK.")
+                    return {"status": "connected", "verified": True}
+                await asyncio.sleep(1)
+
+            # If no audio detected -> Fail (so the old instance won't disconnect)
+            logger.warning("⚠️ [Handoff] Audio verification failed.")
+            raise HTTPException(status_code=500, detail="Audio verification failed")
+
+        return {"status": "connected", "channel": request.channel_name, "uid": request.uid}
+
+    except Exception as e:
+        logger.error(f"Error in /start: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/stop")

@@ -1,5 +1,7 @@
-import logging, inspect, threading, time, os, requests
+import logging
 from typing import Optional
+import inspect
+
 # Try to import the correct Observer class name for version 2.4.1 (IRTC...)
 # with a fallback to the older name (IRtc...)
 try:
@@ -11,7 +13,6 @@ from agora.rtc.agora_base import RtcConnectionPublishConfig, AudioSubscriptionOp
 from agora.rtc.agora_service import AgoraService, AgoraServiceConfig
 from agora.rtc.rtc_connection import RTCConnConfig
 from agora.rtc.local_user_observer import IRTCLocalUserObserver
-from agora_token_builder import RtcTokenBuilder, Role_Subscriber
 from audio_observer import PcmAudioObserver
 
 # Logger setup
@@ -39,6 +40,7 @@ class AgoraManager:
         config.enable_audio_device = 0  # Headless mode (no physical sound card)
         config.enable_video = 0
         config.context = 0
+
         # Handle different field names for app_id in different SDK versions
         try:
             config.app_id = app_id
@@ -152,7 +154,6 @@ class AgoraManager:
 
             logger.info(f"🚀 [Manager] Connection Initiated (Code: {ret})")
             logger.info(f"⚠️ [Manager] NOTE: Audio callbacks will only fire when REMOTE USERS publish audio!")
-            self.start_handoff_timer(channel_name, uid) # start timer
             return True
 
         except Exception as e:
@@ -174,103 +175,10 @@ class AgoraManager:
             status["audio"] = self.audio_observer.get_status()
         return status
 
-    def start_handoff_timer(self, channel_name: str, current_bot_uid: str):
-        """ Starts a 10-minute timer. When time is up, triggers the next bot. """
-        handoff_time = 600  # 10 minutes
-        logger.info(f"⏱️ [Handoff] Timer started. Replacement in {handoff_time}s.")
-        timer = threading.Timer(handoff_time, self._trigger_new_bot, args=[channel_name, current_bot_uid])
-        timer.daemon = True
-        timer.start()
-
-    def _trigger_new_bot(self,channel_name: str, current_bot_uid: str):
-        logger.warning("⚠️ [Handoff] Time is up! Calling next bot...")
-        # Get configuration from Env Vars
-        lambda_url = os.environ.get("TRANSCRIPT_LAMBDA_URL")
-        app_id = os.environ.get("AGORA_APP_ID")
-        app_cert = os.environ.get("AGORA_APP_CERTIFICATE")  # Must be set in Pulumi/Env
-
-        if not lambda_url or not app_id or not app_cert:
-            logger.error("❌ [Handoff] Missing Config (URL/AppID/Cert). Cannot spawn replacement!")
-            return
-
-        # 1. Calculate new UID (Increment by 1 to avoid collision)
-        next_uid = str(int(current_bot_uid) + 1)
-
-        # 2. Generate a valid Token for the new UID using App Certificate
-        expiration_in_seconds = 3600 * 24
-        current_timestamp = int(time.time())
-        privilege_expired_ts = current_timestamp + expiration_in_seconds
-
-        logger.info(f"🔑 Generating token for UID {next_uid}...")
-        new_token = RtcTokenBuilder.buildTokenWithUid(
-            app_id, app_cert, channel_name, int(next_uid), Role_Subscriber, privilege_expired_ts
-        )
-
-        # 3. Prepare payload for the new bot
-        payload = { "channel_name": channel_name, "uid": next_uid, "token": new_token, "is_handoff": True}
-        try:
-            logger.info(f"📞 [Handoff] Dialing next bot at: {lambda_url}")
-            # TASK 3 (Sender side): Wait up to 40s for the new bot to confirm it hears audio
-            response = requests.post(lambda_url, json=payload, timeout=40)
-
-            if response.status_code == 200:
-                logger.info("✅ [Handoff] Success! Replacement is working. Shutting down.")
-                self.stop_connection()
-                time.sleep(2)
-                os._exit(0)
-            else:
-                logger.error(f"❌ [Handoff] Replacement failed! Status: {response.status_code}")
-        except Exception as e:
-            logger.error(f"❌ [Handoff] Failed to trigger replacement: {e}")
-
-
-
-
-""" Observer class to track real-time connection events and user presence user joined or lest. 
- crate instances  in AgoraManager class"""
-class ConnLogger(IRtcConnectionObserver):
-
-    def __init__(self):
-        super().__init__()
-        self.users = set()
-        self.published = set()
-        self.state = None
-
-    def on_user_joined(self, *args):
-        # Handling dynamic arguments as different SDK versions send different params (uid, elapsed)
-        uid = args[1] if len(args) > 1 else args[0]
-        logger.info(f"👤 [Conn] User joined: uid={uid}")
-        self.users.add(uid)
-
-    def on_user_left(self, *args):
-        uid = args[1] if len(args) > 1 else args[0]
-        reason = args[2] if len(args) > 2 else "Unknown"
-        logger.info(f"👤 [Conn] User left: uid={uid}, reason={reason}")
-        if uid in self.users:
-            self.users.remove(uid)
-
-        self.users.discard(uid)
-        self.published.discard(uid)
-
-        if len(self.users) == 0:
-            logger.warning("📉 All users left. Initiating graceful shutdown...")
-            #TODO - no users in meeting so save tranmscript to DB an termin the process
-            threading.Timer(3.0, lambda: os._exit(0)).start()
-
-    def on_connection_state_changed(self, *args):
-        # Triggered when connection state changes (connecting, connected, failed, etc.)
-        logger.info(f"🔌 [Conn] State changed")
-
-    def get_status(self):
-        """Returns collected connection status for the API."""
-        return {
-            "users": list(self.users),
-            "published": list(self.published),
-        }
-
-
-"""Observer for local user events - critical for audio subscription debugging."""
 class LocalUserLogger(IRTCLocalUserObserver):
+    """
+    Observer for local user events - critical for audio subscription debugging.
+    """
     def on_user_audio_track_subscribed(self, agora_local_user, user_id, agora_remote_audio_track):
         logger.info(f"🎵 [LocalUser] Audio track subscribed: user_id={user_id}, track={agora_remote_audio_track}")
 
@@ -285,3 +193,37 @@ class LocalUserLogger(IRTCLocalUserObserver):
 
     def on_user_audio_track_state_changed(self, agora_local_user, user_id, agora_remote_audio_track, state, reason, elapsed):
         logger.info(f"📡 [LocalUser] Audio track state changed: user_id={user_id}, state={state}, reason={reason}")
+
+
+class ConnLogger(IRtcConnectionObserver):
+    """
+    Observer class to track real-time connection events and user presence.
+    """
+    def __init__(self):
+        super().__init__()
+        self.users = set()
+        self.published = set()
+        self.state = None
+
+    def on_user_joined(self, *args):
+        # Handling dynamic arguments as different SDK versions send different params (uid, elapsed)
+        uid = args[1] if len(args) > 1 else args[0]
+        logger.info(f"👤 [Conn] User joined: uid={uid}")
+        self.users.add(uid)
+
+    def on_user_left(self, *args):
+        uid = args[1] if len(args) > 1 else args[0]
+        logger.info(f"👤 [Conn] User left: uid={uid}")
+        self.users.discard(uid)
+        self.published.discard(uid)
+
+    def on_connection_state_changed(self, *args):
+        # Triggered when connection state changes (connecting, connected, failed, etc.)
+        logger.info(f"🔌 [Conn] State changed")
+
+    def get_status(self):
+        """Returns collected connection status for the API."""
+        return {
+            "users": list(self.users),
+            "published": list(self.published),
+        }

@@ -1,10 +1,12 @@
 import logging, queue, threading, json, os, time, sys
+
 from websockets.sync.client import connect
 from agora.rtc.audio_frame_observer import IAudioFrameObserver
 
 # LOGGING SETUP
 # logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 # logger = logging.getLogger("AUDIO_DEBUG")
+
 logging.basicConfig(stream=sys.stdout, level=logging.INFO) # Change from DEBUG to INFO
 logger = logging.getLogger("AUDIO_DEBUG")
 logger.setLevel(logging.INFO)
@@ -48,7 +50,7 @@ class SonioxWorker:
                     # Print logic:
                     # Final sentence -> New line
                     if final_sentence.strip():
-                        print(f"\r🎤 [{self.worker_id}]: {final_sentence}  ")
+                        print(f"\r🎤 [{self.worker_id}]: {final_sentence}                                ")
                     # Partial sentence -> Update same line (Streaming effect)
                     elif partial_sentence.strip():
                         print(f"\r⏳ [{self.worker_id}]: {partial_sentence}", end="", flush=True)
