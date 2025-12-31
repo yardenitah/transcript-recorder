@@ -1,91 +1,77 @@
-
 import logging, os, time, json, asyncio, boto3
-# Try to import the Token Builder
-try:
-    from agora_token_builder import RtcTokenBuilder
-except ImportError:
-    logging.warning("⚠️ agora_token_builder not found! Handoff will fail.")
+
+from agora_token_builder import build_token_with_uid
 
 logger = logging.getLogger(__name__)
 
-# --- Environment Configuration ---
-APP_ID = os.getenv("AGORA_APP_ID")
-APP_CERT = os.getenv("AGORA_APP_CERTIFICATE")
-# Lifecycle limit: How long the Lambda runs before triggering a handoff (Default: 10 mins)
-LIFECYCLE_LIMIT_SECONDS = int(os.getenv("LIFECYCLE_LIMIT_SECONDS", 600))
+# Constants
+LIFECYCLE_LIMIT = int(os.getenv("LIFECYCLE_LIMIT_SECONDS", 600))
+LAMBDA_FUNCTION_NAME = os.getenv("AWS_LAMBDA_FUNCTION_NAME")
+AWS_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
 
 
-def create_api_gateway_event(body_dict):
+async def lifecycle_manager(channel_name, current_uid, agora_manager):
     """
-    Wraps the payload to simulate a standard API Gateway HTTP request for Mangum.
-    Required because we invoke the Lambda directly using boto3.
+    Waits for X seconds, then spawns a replacement bot (Lambda) and kills the current one.
     """
-    return {
-        "resource": "/start",
-        "path": "/start",
-        "httpMethod": "POST",
-        "headers": {"Content-Type": "application/json"},
-        "multiValueHeaders": {},
-        "queryStringParameters": None,
-        "body": json.dumps(body_dict),
-        "isBase64Encoded": False
-    }
+    logger.info(f"⏰ Timer started. Handoff in {LIFECYCLE_LIMIT}s.")
 
-
-async def lifecycle_manager(current_channel: str, current_uid: str, agora_manager):
-    """
-    Background task: Counts down time, then spawns a replacement Lambda instance.
-    Accepts 'agora_manager' instance to stop the connection when handoff is complete.
-    """
-    logger.info(f"⏰ Timer started. Handoff in {LIFECYCLE_LIMIT_SECONDS}s.")
-
-    # 1. Wait for the defined duration
-    await asyncio.sleep(LIFECYCLE_LIMIT_SECONDS)
+    # 1. Wait for the lifecycle limit
+    await asyncio.sleep(LIFECYCLE_LIMIT)
 
     logger.info("⏰ Time is up! Spawning new bot...")
 
-    if not APP_ID or not APP_CERT:
-        logger.error("❌ Missing Config (App ID or Certificate). Cannot spawn replacement.")
-        return
-
     try:
-        # 2. Prepare new identity (UID + 1) and new token
-        next_uid = str(int(current_uid) + 1)
-        token_expiration = int(time.time()) + 3600
+        # 2. Prepare Config for the New Bot
+        APP_ID = os.getenv("AGORA_APP_ID")
+        APP_CERT = os.getenv("AGORA_APP_CERTIFICATE")
 
-        # Generate token locally (Fast & Reliable)
-        new_token = RtcTokenBuilder.buildTokenWithUid(
-            APP_ID, APP_CERT, current_channel, int(next_uid), 2, token_expiration
-        )
+        if not APP_ID or not APP_CERT:
+            logger.error("❌ Missing Agora Config (App ID or Cert). Cannot spawn replacement.")
+            return
 
-        # 3. Prepare payload for the new Lambda instance
+        # Generate a new UID (increment by 1 so they don't collide)
+        # If current is '100', new will be '101'
+        try:
+            new_uid = str(int(current_uid) + 1)
+        except:
+            new_uid = str(int(time.time()) % 10000)
+
+        # ✅ Generate a fresh Token using our custom builder
+        expiration_time_in_seconds = 3600
+        current_timestamp = int(time.time())
+        privilege_expired_ts = current_timestamp + expiration_time_in_seconds
+
+        # Role 1 = Host/Publisher
+        new_token = build_token_with_uid(APP_ID, APP_CERT, channel_name, new_uid, 1, privilege_expired_ts)
+
+        # 3. Invoke AWS Lambda
+        client = boto3.client('lambda', region_name=AWS_REGION)
+
         payload = {
-            "channel_name": current_channel,
-            "uid": next_uid,
-            "token": new_token,
-            "is_handoff": True  # Critical flag: tells the new bot to verify audio
+            "channel_name": channel_name,
+            "uid": new_uid,
+            "token": new_token,  # The newly generated token
+            "is_handoff": True  # Mark this as a relief bot
         }
 
-        function_name = os.environ.get('AWS_LAMBDA_FUNCTION_NAME')
+        logger.info(f"📞 Calling self: {LAMBDA_FUNCTION_NAME} with UID {new_uid}")
 
-        # 4. Invoke the new Lambda and wait for response (RequestResponse)
-        lambda_client = boto3.client('lambda')
-        logger.info(f"📞 Calling self: {function_name}")
-
-        response = lambda_client.invoke(
-            FunctionName=function_name,
-            InvocationType='RequestResponse',  # Wait for the new instance to respond with OK
-            Payload=json.dumps(create_api_gateway_event(payload))
+        # This will fail locally (in Docker) but verify the logic works
+        response = client.invoke(
+            FunctionName=LAMBDA_FUNCTION_NAME,
+            InvocationType='Event',  # Async execution (don't wait for result)
+            Payload=json.dumps(payload)
         )
 
-        # 5. If the new instance responded 200 (OK), we disconnect
-        if response.get('StatusCode') == 200:
-            logger.info("✅ Handoff success! Shutting down current instance.")
-            agora_manager.stop_connection()  # Stop the Agora Engine
-            await asyncio.sleep(2)  # Allow graceful disconnect
-            os._exit(0)  # Terminate the process
-        else:
-            logger.error("⚠️ Handoff failed. Staying alive as backup.")
+        logger.info(f"✅ Spawn command sent! Status: {response['StatusCode']}")
 
     except Exception as e:
         logger.error(f"❌ Error in handoff process: {e}")
+
+    finally:
+        # 4. Graceful Shutdown
+        logger.info("👋 Old bot retiring...")
+        # Optional: Wait a few seconds for overlap before cutting
+        await asyncio.sleep(5)
+        agora_manager.stop_connection()
