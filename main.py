@@ -56,7 +56,7 @@ def get_agora_config():
 
 
 @app.post("/start")
-async def start_bot(request: ConnectionRequest, background_tasks: BackgroundTasks):
+async def start_bot(request: ConnectionRequest):
     try:
         # 1. Start the lifecycle timer in the background
         # We pass 'agora_manager' so the timer can stop it later
