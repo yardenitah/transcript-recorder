@@ -60,6 +60,7 @@ class AccessToken:
 
         signature = hmac.new(self.appCertificate.encode('utf-8'), val, hashlib.sha256).digest()
 
+        # Ensure UID is treated as string for CRC calculation just like in C#
         crc_channel = zlib.crc32(self.channelName.encode('utf-8')) & 0xffffffff
         crc_uid = zlib.crc32(str(self.uid).encode('utf-8')) & 0xffffffff
 
@@ -80,8 +81,13 @@ class AccessToken:
 
     @staticmethod
     def pack_string(v):
+        # ✅ FIX: Handle integers gracefully by converting to string first
+        if isinstance(v, int):
+            v = str(v)
+
         if isinstance(v, str):
             v = v.encode('utf-8')
+
         return struct.pack('<H', len(v)) + v
 
     @staticmethod
