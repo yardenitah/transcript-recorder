@@ -5,8 +5,8 @@ import boto3
 import json
 import time
 
-# Import our custom token builder script
-from agora_token_builder import build_token_with_uid
+# ✅ Import the official builder class
+from agora_token_builder import RtcTokenBuilder, Role
 
 logger = logging.getLogger(__name__)
 
@@ -14,17 +14,6 @@ logger = logging.getLogger(__name__)
 LIFECYCLE_LIMIT = int(os.getenv("LIFECYCLE_LIMIT_SECONDS", 600))
 LAMBDA_FUNCTION_NAME = os.getenv("AWS_LAMBDA_FUNCTION_NAME")
 AWS_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
-
-
-def validate_token(token):
-    """
-    Sanity check for the generated token.
-    """
-    if not token or not isinstance(token, str):
-        return False, "Token is empty or not a string"
-    if len(token) < 50:
-        return False, "Token is suspiciously short"
-    return True, "OK"
 
 
 async def lifecycle_manager(channel_name, current_uid, agora_manager):
@@ -43,39 +32,36 @@ async def lifecycle_manager(channel_name, current_uid, agora_manager):
         APP_ID = os.getenv("AGORA_APP_ID")
         APP_CERT = os.getenv("AGORA_APP_CERTIFICATE")
 
-        # --- CHECK 1: Validate Credentials ---
-        if not APP_ID:
-            logger.error("❌ CRITICAL: AGORA_APP_ID is missing!")
-            return
-        if not APP_CERT:
-            logger.error("❌ CRITICAL: AGORA_APP_CERTIFICATE is missing! Token generation will fail.")
+        if not APP_ID or not APP_CERT:
+            logger.error("❌ CRITICAL: AGORA Credentials missing.")
             return
 
-        logger.info(f"🔐 Credentials found. AppID: {APP_ID[:5]}... | Cert: {APP_CERT[:5]}...")
-
-        # Generate a new UID (increment by 1 so they don't collide)
+        # Generate a new UID (increment by 1)
         try:
-            new_uid = str(int(current_uid) + 1)
+            # Ensuring it's an integer for the calculation
+            new_uid_int = int(current_uid) + 1
+            new_uid_str = str(new_uid_int)
         except:
-            new_uid = str(int(time.time()) % 10000)
+            new_uid_int = int(time.time()) % 10000
+            new_uid_str = str(new_uid_int)
 
-        logger.info(f"🔢 Generating token for New UID: {new_uid}")
+        logger.info(f"🔢 Generating INT token for UID: {new_uid_str}")
 
-        # ✅ Generate a fresh Token using our custom builder
+        # ✅ Generate Token using RtcTokenBuilder (The Official Way)
         expiration_time_in_seconds = 3600
         current_timestamp = int(time.time())
         privilege_expired_ts = current_timestamp + expiration_time_in_seconds
 
-        # Role 1 = Host/Publisher
-        new_token = build_token_with_uid(APP_ID, APP_CERT, channel_name, new_uid, 1, privilege_expired_ts)
+        # We use buildTokenWithUid to ensure compatibility with Web Demo and Int UIDs
+        new_token = RtcTokenBuilder.buildTokenWithUid(
+            APP_ID,
+            APP_CERT,
+            channel_name,
+            new_uid_int,  # Pass as INT here
+            Role.Rtc_Publisher,
+            privilege_expired_ts
+        )
 
-        # --- CHECK 2: Validate Token Structure ---
-        is_valid, reason = validate_token(new_token)
-        if not is_valid:
-            logger.error(f"❌ Token Generation FAILED: {reason}")
-            return
-
-        # --- CHECK 3: Print Token for manual verification ---
         logger.info(f"✅ Token Generated Successfully!")
         logger.info(f"🔑 NEW TOKEN: {new_token}")
 
@@ -84,17 +70,16 @@ async def lifecycle_manager(channel_name, current_uid, agora_manager):
 
         payload = {
             "channel_name": channel_name,
-            "uid": new_uid,
-            "token": new_token,  # The newly generated token
-            "is_handoff": True  # Mark this as a relief bot
+            "uid": new_uid_str,  # Passed as string in JSON payload
+            "token": new_token,
+            "is_handoff": True
         }
 
-        logger.info(f"📞 Calling self: {LAMBDA_FUNCTION_NAME} with UID {new_uid}")
+        logger.info(f"📞 Calling self: {LAMBDA_FUNCTION_NAME} with UID {new_uid_str}")
 
-        # This will fail locally (in Docker) but verify the logic works
         response = client.invoke(
             FunctionName=LAMBDA_FUNCTION_NAME,
-            InvocationType='Event',  # Async execution (don't wait for result)
+            InvocationType='Event',
             Payload=json.dumps(payload)
         )
 
@@ -104,7 +89,6 @@ async def lifecycle_manager(channel_name, current_uid, agora_manager):
         logger.error(f"❌ Error in handoff process: {e}")
 
     finally:
-        # 4. Graceful Shutdown
         logger.info("👋 Old bot retiring...")
         await asyncio.sleep(5)
         agora_manager.stop_connection()
