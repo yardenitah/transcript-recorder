@@ -100,7 +100,6 @@ class AccessToken:
 def build_token_with_uid(app_id, app_certificate, channel_name, uid, role, privilege_expired_ts):
     """
     Main entry point to build the Agora Access Token (RTC).
-
     Args:
         role: 1 for Host/Publisher, 2 for Subscriber (Not directly used in token gen but good for context)
         privilege_expired_ts: Timestamp when the token expires (seconds since epoch)
