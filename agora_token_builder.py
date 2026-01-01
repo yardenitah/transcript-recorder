@@ -1,122 +1,89 @@
+import sys
+import os
+import time
 import hmac
 import hashlib
 import base64
 import struct
-import json
 import zlib
-import time
 import logging
 
-# Set up logging for this module
-logger = logging.getLogger("AgoraBuilder")
+# Set up logging
+logger = logging.getLogger("AgoraRawBuilder")
 logging.basicConfig(level=logging.INFO)
 
 
-class ServiceRtc:
-    kPrivilegeJoinChannel = 1
-    kPrivilegePublishAudioStream = 2
-    kPrivilegePublishVideoStream = 3
-    kPrivilegePublishDataStream = 4
+class AccessToken:
+    # Constants for privileges
+    kJoinChannel = 1
+    kPublishAudioStream = 2
+    kPublishVideoStream = 3
+    kPublishDataStream = 4
 
-    def __init__(self, channel_name, uid):
-        self._channel_name = channel_name
-        self._uid = uid
-        self._privileges = {}
+    def __init__(self, appID, appCertificate, channelName, uid):
+        self.appID = appID
+        self.appCertificate = appCertificate
+        self.channelName = channelName
 
-    def add_privilege(self, privilege, expire):
-        self._privileges[privilege] = expire
+        # ⚠️ CRITICAL: We mimic C# behavior here.
+        # Even if uid is int, we treat it as the raw value passed.
+        # The logic in handoff_manager will force it to string to match C# "uid.ToString()"
+        self.uid = uid
 
-    def pack(self):
-        return struct.pack('<H', self.kPrivilegeJoinChannel) + struct.pack('<I', self._privileges.get(
-            self.kPrivilegeJoinChannel, 0)) + \
-            struct.pack('<H', self.kPrivilegePublishAudioStream) + struct.pack('<I', self._privileges.get(
-                self.kPrivilegePublishAudioStream, 0)) + \
-            struct.pack('<H', self.kPrivilegePublishVideoStream) + struct.pack('<I', self._privileges.get(
-                self.kPrivilegePublishVideoStream, 0)) + \
-            struct.pack('<H', self.kPrivilegePublishDataStream) + struct.pack('<I', self._privileges.get(
-                self.kPrivilegePublishDataStream, 0))
+        self.messages = {}
 
+    def addPrivilege(self, privilege, expireTimestamp):
+        self._add_privilege(privilege, expireTimestamp)
 
-class AccessToken2:
-    def __init__(self, app_id, app_certificate, issue_ts, expire):
-        self._app_id = app_id
-        self._app_certificate = app_certificate
-        self._issue_ts = issue_ts
-        self._expire = expire
-        self._salt = 1
-        self._services = {}
-
-    def add_service(self, service):
-        self._services[service.__class__.__name__] = service
+    def _add_privilege(self, privilege, expireTimestamp):
+        self.messages[privilege] = expireTimestamp
 
     def build(self):
-        try:
-            logger.info(f"🛠️ [TokenBuilder] Starting build process...")
-            logger.info(f"   - App ID Length: {len(self._app_id)}")
-            logger.info(f"   - Cert Length: {len(self._app_certificate)}")
+        self.message = {}
+        m = sorted(self.messages.items(), key=lambda item: item[0])
+        for (k, v) in m:
+            self.message[k] = v
 
-            signing_content = struct.pack('<H', self._salt) + \
-                              struct.pack('<I', self._issue_ts) + \
-                              struct.pack('<H', len(self._services))
+        # Packing logic matching the raw C# implementation
+        val = self.pack_string(self.appID) + \
+              self.pack_string(self.channelName) + \
+              self.pack_string(self.uid) + \
+              self.pack_map(self.message)
 
-            for service_name in self._services:
-                service = self._services[service_name]
-                signing_content += struct.pack('<H', 1)
-                signing_content += struct.pack('<H', len(service.pack()))
-                signing_content += service.pack()
+        signature = hmac.new(self.appCertificate.encode('utf-8'), val, hashlib.sha256).digest()
 
-            logger.info("🛠️ [TokenBuilder] Signing content prepared. Calculating HMAC...")
+        crc_channel = zlib.crc32(self.channelName.encode('utf-8')) & 0xffffffff
 
-            signature = hmac.new(self._app_certificate.encode('utf-8'), self._app_id.encode('utf-8') + signing_content,
-                                 hashlib.sha256).digest()
+        # ⚠️ CRITICAL: C# hashes the STRING representation of the UID
+        crc_uid = zlib.crc32(str(self.uid).encode('utf-8')) & 0xffffffff
 
-            content = struct.pack('<H', 1) + \
-                      self._app_id.encode('utf-8') + \
-                      struct.pack('<I', self._issue_ts) + \
-                      struct.pack('<I', self._salt) + \
-                      struct.pack('<H', len(self._services))
+        content = self.pack_string(signature) + \
+                  self.pack_uint32(crc_channel) + \
+                  self.pack_uint32(crc_uid) + \
+                  self.pack_string(val)
 
-            for service_name in self._services:
-                service = self._services[service_name]
-                content += struct.pack('<H', 1)
-                content += struct.pack('<H', len(service.pack()))
-                content += service.pack()
+        # Protocol 006 Prefix
+        return "006" + self.appID + base64.b64encode(content).decode('utf-8')
 
-            content += struct.pack('<H', len(signature)) + signature
-
-            final_token = "007" + base64.b64encode(zlib.compress(content)).decode('utf-8')
-            logger.info(f"✅ [TokenBuilder] Token 007 built successfully. Length: {len(final_token)}")
-            return final_token
-
-        except Exception as e:
-            logger.error(f"❌ [TokenBuilder] CRASH during build: {str(e)}")
-            raise e
-
-
-class RtcTokenBuilder2:
     @staticmethod
-    def build_token_with_uid(app_id, app_certificate, channel_name, uid, role, token_expire):
-        logger.info(f"🚀 [TokenBuilder] Request received:")
-        logger.info(f"   - Channel: {channel_name} (Type: {type(channel_name)})")
-        logger.info(f"   - UID: {uid} (Type: {type(uid)})")
+    def pack_uint16(v):
+        return struct.pack('<H', int(v))
 
-        # Validation checks
-        if not isinstance(uid, int):
-            logger.warning(f"⚠️ [TokenBuilder] UID is NOT an int! It is {type(uid)}. Attempting conversion...")
-            try:
-                uid = int(uid)
-            except:
-                logger.error("❌ [TokenBuilder] Failed to convert UID to int!")
-                raise ValueError("UID must be an integer for Protocol 007")
+    @staticmethod
+    def pack_uint32(v):
+        return struct.pack('<I', int(v))
 
-        token = AccessToken2(app_id, app_certificate, int(time.time()), token_expire)
-        service_rtc = ServiceRtc(channel_name, uid)
+    @staticmethod
+    def pack_string(v):
+        if isinstance(v, str):
+            v = v.encode('utf-8')
+        return struct.pack('<H', len(v)) + v
 
-        service_rtc.add_privilege(ServiceRtc.kPrivilegeJoinChannel, token_expire)
-        if role == 1:
-            service_rtc.add_privilege(ServiceRtc.kPrivilegePublishAudioStream, token_expire)
-            service_rtc.add_privilege(ServiceRtc.kPrivilegePublishVideoStream, token_expire)
-            service_rtc.add_privilege(ServiceRtc.kPrivilegePublishDataStream, token_expire)
-
-        token.add_service(service_rtc)
-        return token.build()
+    @staticmethod
+    def pack_map(k_v):
+        buffer = bytearray()
+        buffer += struct.pack('<H', len(k_v))
+        for k, v in k_v.items():
+            buffer += AccessToken.pack_uint16(k)
+            buffer += AccessToken.pack_uint32(v)
+        return bytes(buffer)

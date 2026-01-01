@@ -5,8 +5,8 @@ import boto3
 import json
 import time
 
-# ✅ Import the NEW builder
-from agora_token_builder import RtcTokenBuilder2
+# ✅ Import the RAW AccessToken class
+from agora_token_builder import AccessToken
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +32,6 @@ async def lifecycle_manager(channel_name, current_uid, agora_manager):
         APP_ID = os.getenv("AGORA_APP_ID")
         APP_CERT = os.getenv("AGORA_APP_CERTIFICATE")
 
-        # --- DEBUG LOGS ---
-        logger.info(f"🕵️ [Handoff] Checking Environment Variables:")
-        logger.info(f"   - AGORA_APP_ID exists? {bool(APP_ID)}")
-        logger.info(f"   - AGORA_APP_CERTIFICATE exists? {bool(APP_CERT)}")
-        logger.info(f"   - Current UID: {current_uid} (Type: {type(current_uid)})")
-
         if not APP_ID or not APP_CERT:
             logger.error("❌ CRITICAL: AGORA Credentials missing from Environment!")
             return
@@ -47,43 +41,48 @@ async def lifecycle_manager(channel_name, current_uid, agora_manager):
             new_uid_int = int(current_uid) + 1
             logger.info(f"🔢 [Handoff] Calculated New UID: {new_uid_int}")
         except Exception as e:
-            logger.warning(f"⚠️ [Handoff] Could not increment UID ({e}). Using random int.")
+            logger.warning(f"⚠️ [Handoff] Could not increment UID. Using random int.")
             new_uid_int = int(time.time()) % 10000
 
-        # ✅ Generate Token using RtcTokenBuilder2 (Protocol 007)
+        # ✅ CRITICAL FIX: Match C# Behavior Exactly
+        # C#: new AccessToken(..., uid.ToString())
+        # Python: AccessToken(..., str(uid))
+        uid_as_string = str(new_uid_int)
+
+        logger.info(f"⚙️ [Handoff] Building LOW-LEVEL Token for UID STRING: '{uid_as_string}'")
+
+        # Instantiate the low-level builder directly
+        token_builder = AccessToken(APP_ID, APP_CERT, channel_name, uid_as_string)
+
+        # Add Privileges manually (Join + Publish Audio/Video/Data)
         expiration_time_in_seconds = 3600
+        current_timestamp = int(time.time())
+        privilege_expired_ts = current_timestamp + expiration_time_in_seconds
 
-        logger.info("⚙️ [Handoff] Calling RtcTokenBuilder2...")
-        try:
-            new_token = RtcTokenBuilder2.build_token_with_uid(
-                APP_ID,
-                APP_CERT,
-                channel_name,
-                new_uid_int,  # Must be INT
-                1,  # Role Publisher
-                expiration_time_in_seconds
-            )
-            logger.info(f"✅ [Handoff] Token Received! (Starts with: {new_token[:10]}...)")
-            logger.info(f"🔑 FULL TOKEN: {new_token}")
+        token_builder.addPrivilege(AccessToken.kJoinChannel, privilege_expired_ts)
+        token_builder.addPrivilege(AccessToken.kPublishAudioStream, privilege_expired_ts)
+        token_builder.addPrivilege(AccessToken.kPublishVideoStream, privilege_expired_ts)
+        token_builder.addPrivilege(AccessToken.kPublishDataStream, privilege_expired_ts)
 
-        except Exception as build_err:
-            logger.error(f"❌ [Handoff] Token Builder CRASHED: {build_err}")
-            return  # Stop here if token failed
+        # Build the final string
+        new_token = token_builder.build()
+
+        logger.info(f"✅ [Handoff] Token Generated! Length: {len(new_token)}")
+        logger.info(f"🔑 FULL TOKEN: {new_token}")
 
         # 3. Invoke AWS Lambda
-        logger.info("☁️ [Handoff] Preparing AWS Boto3 Client...")
         client = boto3.client('lambda', region_name=AWS_REGION)
 
         payload = {
             "channel_name": channel_name,
-            "uid": str(new_uid_int),
+            # We send it as string in payload, but the receiver (main.py) handles types usually
+            "uid": uid_as_string,
             "token": new_token,
             "is_handoff": True
         }
 
         logger.info(f"📞 [Handoff] Invoking Lambda: {LAMBDA_FUNCTION_NAME}")
 
-        # Note: This might still fail with AccessDenied in Docker, but we want to see it try.
         response = client.invoke(
             FunctionName=LAMBDA_FUNCTION_NAME,
             InvocationType='Event',
